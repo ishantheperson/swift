@@ -52,6 +52,7 @@ SYNTAX_NODE_SERIALIZATION_CODES = {
     'ImplicitMemberExpr': 46,
     'IntegerLiteralExpr': 47,
     'StringLiteralExpr': 48,
+    'PatternLiteralExpr': 251,
     'BooleanLiteralExpr': 49,
     'TernaryExpr': 50,
     'MemberAccessExpr': 51,

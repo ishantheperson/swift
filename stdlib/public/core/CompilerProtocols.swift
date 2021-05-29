@@ -526,6 +526,73 @@ extension ExpressibleByStringLiteral
   }
 }
 
+// Regex protocols by Nate Cook, with some modifications
+// by Ishan for temporary ease of implementation :) 
+public protocol ExpressibleByPattern {
+  associatedtype PatternInterpolation: PatternInterpolationProtocol
+  associatedtype Captured 
+  
+  // How to typecheck 
+  // let regex = '\d+-\d+-\d+'
+  //
+  // 0. In ParseExpr.cpp we create TapExpr's body with 
+  //    the appropriate statements
+  // 1. Overall type must be T: ExpressibleByPatternLiteral.
+  // 2. We also want to make sure that T.Captured == <inferred capture type>
+  //    This sounds like a type member constraint, but I can ask
+  //    about that later
+  // 3. Those 2 constraints should be all we need. In CSApply.cpp
+  //    we know T, and so we know T.PatternInterpolation.
+  // 4. Set TapExpr's SubExpr to a OpaqueExpr of type T.PatternInterpolation
+  // 5. Finally in SILGenExpr.cpp we can call T.init using the result from TapExpr 
+  init(patternInterpolation: PatternInterpolation)
+  
+  init()
+  // just for testing
+  mutating func sayHello()
+}
+
+public enum CaptureQuantifier: Equatable {
+  case lowerBound(Int)    // + -> .lowerBound(1), * -> .lowerBound(0)
+  case upperBound(Int)    // ? -> .upperBound(1)
+  case range(Range<Int>)
+}
+
+// extension CaptureQuantifier: CustomStringConvertible {
+//   public var description: String {
+//     switch self {
+//     case .lowerBound(0):
+//       return "*"
+//     case .lowerBound(1):
+//       return "+"
+//     case .upperBound(1):
+//       return "?"
+//     case .lowerBound(let lower):
+//       return "{\(lower),}"
+//     case .upperBound(let upper):
+//       return "{,\(upper)}"
+//     case .range(let range):
+//       return "{\(range.lowerBound),\(range.upperBound)}"
+//     }
+//   }
+// }
+
+public protocol PatternInterpolationProtocol {
+  associatedtype PatternLiteralType: _ExpressibleByBuiltinStringLiteral
+
+  // TODO: removed the parameters since that is just for performance
+  // right? 
+  init()
+  
+  mutating func appendPattern(_ literal: PatternLiteralType)
+  mutating func startCaptureGroup()
+  // TODO: I made this Int for now since I didn't want to deal with the 
+  // hassle of generating enum cases.
+  mutating func endCaptureGroup(quantifier: Int)
+  
+  // Informal requirement: mutating func appendInterpolation(...)
+}
+
 /// A type that can be initialized using an array literal.
 ///
 /// An array literal is a simple way of expressing a list of values. Simply

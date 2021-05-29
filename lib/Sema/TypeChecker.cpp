@@ -117,7 +117,12 @@ ProtocolDecl *TypeChecker::getLiteralProtocol(ASTContext &Context, Expr *expr) {
     return TypeChecker::getProtocol(
         Context, expr->getLoc(),
         KnownProtocolKind::ExpressibleByStringInterpolation);
-
+  
+  if (isa<PatternLiteralExpr>(expr))
+    return TypeChecker::getProtocol(
+      Context, expr->getLoc(), 
+      KnownProtocolKind::ExpressibleByPatternInterpolation);
+  
   if (auto E = dyn_cast<MagicIdentifierLiteralExpr>(expr)) {
     switch (E->getKind()) {
 #define MAGIC_STRING_IDENTIFIER(NAME, STRING, SYNTAX_KIND) \

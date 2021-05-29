@@ -654,7 +654,7 @@ public:
 /// BuiltinLiteralExpr - Common base class between all literals
 /// that provides BuiltinInitializer
 class BuiltinLiteralExpr : public LiteralExpr {
-  // Set by Seam:
+  // Set by Sema:
   ConcreteDeclRef BuiltinInitializer;
 
 public:
@@ -913,6 +913,59 @@ public:
   static bool classof(const Expr *E) {
     return E->getKind() == ExprKind::Tap;
   }
+};
+
+class PatternLiteralExpr : public LiteralExpr {
+  SourceLoc Loc;
+  SourceLoc TrailingQuoteLoc;
+
+  StringRef PatternString;
+  TapExpr *BuildingExpr;
+  OpaqueValueExpr *BuilderOpaqueNode;
+
+  // TODO: Add in interpolations. 
+
+  ConcreteDeclRef BuilderInit;
+
+public:
+  PatternLiteralExpr(SourceLoc Loc, 
+                     SourceLoc TrailingQuoteLoc, 
+                     StringRef PatternString, // TODO: remove this since it will all be in BuildingExpr
+                     TapExpr *BuildingExpr)
+      : LiteralExpr(ExprKind::PatternLiteral, /*ImplicitlyGenerated = */ false),
+        Loc(Loc),
+        TrailingQuoteLoc(TrailingQuoteLoc),
+        PatternString(PatternString),
+        BuildingExpr(BuildingExpr)
+    {
+    }
+
+  // These two are the same as in InterpolatedStringLiteral
+
+  SourceLoc getStartLoc() const {
+    return Loc;
+  }
+
+  SourceLoc getEndLoc() const {
+    // SourceLocs are token based, and the interpolated string is one string
+    // token, so the range should be (Start == End).
+    return Loc;
+  }
+
+  void setBuildingExpr(TapExpr *expr) { BuildingExpr = expr; }
+  TapExpr *getBuildingExpr() { return BuildingExpr; }
+  
+  const StringRef getPatternString() const { return PatternString; }
+
+  void setBuilderInit(ConcreteDeclRef builder) { BuilderInit = builder; }
+  ConcreteDeclRef getBuilderInit() { return BuilderInit; }
+
+  void setBuilderOpaqueNode(OpaqueValueExpr *expr) { BuilderOpaqueNode = expr; }
+  OpaqueValueExpr *getBuilderOpaqueNode() { return BuilderOpaqueNode; }
+
+  static bool classof(const Expr *E) {
+    return E->getKind() == ExprKind::PatternLiteral;
+  }  
 };
 
 /// InterpolatedStringLiteral - An interpolated string literal.

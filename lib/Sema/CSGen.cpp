@@ -1137,6 +1137,37 @@ namespace {
       return tv;
     }
 
+    Type visitPatternLiteralExpr(PatternLiteralExpr *expr) {
+      // TODO
+      llvm::errs() << "Inside " << __PRETTY_FUNCTION__ << "\n";
+
+      auto &ctx = CS.getASTContext();
+      auto patternProto = TypeChecker::getProtocol(
+        ctx, expr->getLoc(), 
+        KnownProtocolKind::ExpressibleByPatternInterpolation);
+      
+      assert(patternProto && "Can't find protocol ExpressibleByPatternInterpolation");
+
+      // The type of the expression must conform to the
+      // ExpressibleByPatternInterpolation protocol.
+      auto locator = CS.getConstraintLocator(expr);
+      auto tv = CS.createTypeVariable(locator,
+                                      TVO_PrefersSubtypeBinding |
+                                      TVO_CanBindToNoEscape);
+        
+      CS.addConstraint(ConstraintKind::LiteralConformsTo, 
+                       tv,
+                       patternProto->getDeclaredInterfaceType(),
+                       locator);
+
+      TapExpr *builderExpr = expr->getBuildingExpr();
+      Type builderType = CS.getType(builderExpr);
+      auto builderLocator = CS.getConstraintLocator(builderExpr);
+      CS.addConstraint(ConstraintKind::Equal, builderType, tv, builderLocator);
+
+      return tv;
+    }
+
     Type visitMagicIdentifierLiteralExpr(MagicIdentifierLiteralExpr *expr) {
       switch (expr->getKind()) {
       // Magic pointer identifiers are of type UnsafeMutableRawPointer.

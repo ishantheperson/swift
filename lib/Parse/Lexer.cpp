@@ -1906,6 +1906,40 @@ void Lexer::lexStringLiteral(unsigned CustomDelimiterLen) {
 }
 
 
+void Lexer::lexPatternLiteral() {
+  // TODO: combine this with lexStringLiteral
+  const char *TokStart = CurPtr - 1;
+  // For now, ignore multiline tokens
+
+  while (true) {
+    // TODO: handle peek-ahead for interpolations
+
+    // Grab a character. Note that we have special rules
+    // for escape characters (e.g. \d should be allowed)
+    // so we need to do it ourselves
+
+    uint32_t CharValue = validateUTF8CharacterAndAdvance(CurPtr, BufferEnd);
+    assert(CharValue != ~0U);
+
+    // TODO: unprintable ASCII
+    // TODO: illegal newlines in string literal
+    // TODO: bounds checking
+    if (CharValue == '\\' && *CurPtr == '\'') {
+      // Skip escaped quote and advance
+      CurPtr++;
+    }
+    else if (CharValue == '\'') {
+      // End of literal, stop
+      break;
+    }
+  }
+
+  formToken(tok::pattern_literal, TokStart);
+  // Currently there is no special handling for
+  // pattern literals so we don't need to set any special 
+  // characteristics such as multiline string, custom delimiter, etc. 
+}
+
 /// We found an opening curly quote in the source file.  Scan ahead until we
 /// find and end-curly-quote (or straight one).  If we find what looks to be a
 /// string literal, diagnose the problem and return a pointer to the end of the
@@ -2489,8 +2523,9 @@ void Lexer::lexImpl() {
     return lexNumber();
 
   case '"':
-  case '\'':
     return lexStringLiteral();
+  case '\'':
+    return lexPatternLiteral();
       
   case '`':
     return lexEscapedIdentifier();

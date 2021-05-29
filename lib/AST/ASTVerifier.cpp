@@ -800,6 +800,26 @@ public:
       OpaqueValues.erase(expr->getInterpolationExpr());
     }
 
+    bool shouldVerify(PatternLiteralExpr *expr) {
+      llvm::errs() << __PRETTY_FUNCTION__ << "\n";
+      if (!shouldVerify(cast<Expr>(expr)))
+        return false;
+
+      // I think this temporarily insert the opaque value
+      // used in the TapExpr since apparently 
+      // we are supposed to bypass that system
+      // for RValue generation in SILGenExpr
+      assert(!OpaqueValues.count(expr->getBuilderOpaqueNode()));
+      OpaqueValues[expr->getBuilderOpaqueNode()] = 0;
+      return true;
+    }
+
+    void cleanup(PatternLiteralExpr *expr) {
+      llvm::errs() << __PRETTY_FUNCTION__ << "\n";
+      assert(OpaqueValues.count(expr->getBuilderOpaqueNode()));
+      OpaqueValues.erase(expr->getBuilderOpaqueNode());
+    }    
+
     bool shouldVerify(OpenExistentialExpr *expr) {
       if (!shouldVerify(cast<Expr>(expr)))
         return false;
@@ -3641,6 +3661,10 @@ public:
         // that comparing the start of the string token to the end of an
         // embedded expression will fail.
         if (isa<InterpolatedStringLiteralExpr>(E))
+          return;
+        // Anything that applies to InterpolatedStringLiteralExpr
+        // probably also applies to PatternLiteralExpr :shrug:
+        if (isa<PatternLiteralExpr>(E))
           return;
 
         if (E->isImplicit())

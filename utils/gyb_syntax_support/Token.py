@@ -328,6 +328,11 @@ SYNTAX_TOKENS = [
             classification='FloatingLiteral', serialization_code=112),
     Literal('StringLiteral', 'string_literal',
             classification='StringLiteral', serialization_code=113),
+    # TODO: using StringLiteral classification here. Apparently this
+    # affects things like syntax highlighting so it shouldn't be too 
+    # much of a problem
+    Literal('PatternLiteral', 'pattern_literal',
+            classification='StringLiteral', serialization_code=123),
 
     Misc('Unknown', 'unknown', serialization_code=115),
     Misc('Identifier', 'identifier', classification='Identifier',

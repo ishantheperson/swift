@@ -538,6 +538,16 @@ class Traversal : public ASTVisitor<Traversal, Expr*, Stmt*,
     return E;
   }
 
+  Expr *visitPatternLiteralExpr(PatternLiteralExpr *E) {
+    if (auto oldBuildingExpr = E->getBuildingExpr()) {
+      if (auto buildingExpr = doIt(oldBuildingExpr))
+        E->setBuildingExpr(dyn_cast<TapExpr>(buildingExpr));
+      else
+        return nullptr;
+    }
+    return E;
+  }
+
   Expr *visitObjectLiteralExpr(ObjectLiteralExpr *E) {
     if (Expr *arg = E->getArg()) {
       if (Expr *arg2 = doIt(arg)) {

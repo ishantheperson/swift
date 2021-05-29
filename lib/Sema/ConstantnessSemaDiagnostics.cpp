@@ -127,7 +127,8 @@ static Expr *checkConstantness(Expr *expr) {
       expressionsToCheck.push_back(optionalExpr->getSubExpr());
       continue;
     }
-    // Literal expressions also includes InterpolatedStringLiteralExpr.
+    // Literal expressions also includes InterpolatedStringLiteralExpr
+    // and PatternLiteralExpr (I hope)
     if (isa<LiteralExpr>(expr))
       continue;
     if (isa<TypeExpr>(expr))

@@ -566,6 +566,7 @@ private:
                         bool EmitDiagnostics, bool IsMultilineString = false,
                         unsigned CustomDelimiterLen = 0);
   void lexStringLiteral(unsigned CustomDelimiterLen = 0);
+  void lexPatternLiteral();
   void lexEscapedIdentifier();
 
   void tryLexEditorPlaceholder();

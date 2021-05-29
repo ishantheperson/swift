@@ -1977,6 +1977,7 @@ public:
     E->getInitializer().dump(PrintWithColorRAII(OS, LiteralValueColor).getOS());
     PrintWithColorRAII(OS, ParenthesisColor) << ')';
   }
+  
   void visitInterpolatedStringLiteralExpr(InterpolatedStringLiteralExpr *E) {
     printCommon(E, "interpolated_string_literal_expr");
     
@@ -2002,6 +2003,18 @@ public:
     printRec(E->getAppendingExpr());
     PrintWithColorRAII(OS, ParenthesisColor) << ')';
   }
+  
+  void visitPatternLiteralExpr(PatternLiteralExpr *E) {
+    printCommon(E, "pattern_literal_expr"); 
+    PrintWithColorRAII(OS, LiteralValueColor)
+      << " text="
+      << E->getPatternString()
+      << "\n";
+      
+    printRec(E->getBuildingExpr());
+    // TODO: printing out pattern literal expressions
+  }
+
   void visitMagicIdentifierLiteralExpr(MagicIdentifierLiteralExpr *E) {
     printCommon(E, "magic_identifier_literal_expr")
       << " kind=" << MagicIdentifierLiteralExpr::getKindString(E->getKind());

@@ -1233,6 +1233,7 @@ static void diagnoseIgnoredLiteral(ASTContext &Ctx, LiteralExpr *LE) {
     case ExprKind::BooleanLiteral: return "boolean";
     case ExprKind::StringLiteral: return "string";
     case ExprKind::InterpolatedStringLiteral: return "string";
+    case ExprKind::PatternLiteral: return "pattern literal";
     case ExprKind::MagicIdentifierLiteral:
       return MagicIdentifierLiteralExpr::getKindString(
           cast<MagicIdentifierLiteralExpr>(LE)->getKind());
@@ -1877,7 +1878,7 @@ bool TypeCheckASTNodeAtLocRequest::evaluate(Evaluator &evaluator,
         return {false, E};
 
       // Don't walk into 'TapExpr'. They should be type checked with parent
-      // 'InterpolatedStringLiteralExpr'.
+      // 'InterpolatedStringLiteralExpr' (what about PatternLiteralExpr?)
       if (isa<TapExpr>(E))
         return {false, E};
 

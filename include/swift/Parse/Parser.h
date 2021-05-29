@@ -1526,6 +1526,7 @@ public:
   ParserResult<Expr> parseExprSelector();
   ParserResult<Expr> parseExprSuper();
   ParserResult<Expr> parseExprStringLiteral();
+  ParserResult<Expr> parseExprPatternLiteral();
 
   StringRef copyAndStripUnderscores(StringRef text);
 

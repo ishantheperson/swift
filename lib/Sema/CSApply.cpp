@@ -2865,6 +2865,79 @@ namespace {
       return expr;
     }
     
+    Expr *visitPatternLiteralExpr(PatternLiteralExpr *expr) {
+      // TODO: this is just copied and pasted
+      auto openedType = cs.getType(expr);
+      // Type of the expression. Not sure if a potential generic parameter
+      // can be inferred. If not, then we will just require it to be
+      // hardcoded in the declaration for now. 
+      // 
+      // We may need to do some associated type nonsense with
+      // the protocols. The compiler will check if the associated 
+      // type "Capture" with the protocol matches the type inferred
+      // from the string literal. I believe this function would be a 
+      // good place to do that. 
+      auto type = simplifyType(openedType);
+      cs.setType(expr, type);
+
+      llvm::errs() << "Got to " << __PRETTY_FUNCTION__  << "\n";
+
+      auto &ctx = cs.getASTContext();
+      auto loc = expr->getStartLoc();
+
+      StringRef str = expr->getPatternString();
+      llvm::errs() << "The string is " << str << "\n";
+
+      // TODO: look for an initializer?
+      auto proto = TypeChecker::getProtocol(ctx, loc, KnownProtocolKind::ExpressibleByPatternInterpolation);
+      assert(proto && "Missing protocol ExpressibleByPatternInterpolation");
+
+      auto conformance =
+        TypeChecker::conformsToProtocol(type, proto, cs.DC->getParentModule());
+      assert(conformance && "Deduced pattern literal type does not conform to ExpressibleByPatternInterpolation");
+      
+      // Create the name for init()
+      DeclName constructorName(ctx, DeclBaseName::createConstructor(), ArrayRef<Identifier>());
+
+      ConcreteDeclRef constructor = 
+        conformance.getWitnessByName(type->getRValueType(), constructorName);
+
+      if (!constructor) {
+        llvm::errs() << "Couldn't seem to get the constructor\n";
+        return nullptr;
+      }
+      if (!isa<AbstractFunctionDecl>(constructor.getDecl())) {
+        llvm::errs() << "Constructor isn't a function?\n";
+        return nullptr;
+      }
+
+      expr->setBuilderInit(constructor);
+
+      // Now that we have the constructor for the builder we can
+      // set expr->setSubExpr
+      // auto constructorDeclRef = 
+      //   new (ctx) DeclRefExpr(constructor, 
+      //                         DeclNameLoc(), 
+      //                         /*Implicit=*/true, 
+      //                         AccessSemantics::Ordinary,
+      //                         type);
+      // auto callConstructor = 
+      //   CallExpr::createImplicit(ctx, constructorDeclRef, ArrayRef<Expr*>{}, ArrayRef<Identifier>{});
+      // callConstructor->setType(type);
+      // callConstructor->setThrows(false);
+      // cs.setType(callConstructor, type);
+
+      auto callConstructor = 
+        new (ctx) OpaqueValueExpr(expr->getSourceRange(), type); 
+      cs.setType(callConstructor, type);
+      expr->setBuilderOpaqueNode(callConstructor);
+
+      auto buildingExpr = expr->getBuildingExpr();
+      buildingExpr->setSubExpr(callConstructor);
+
+      return expr;
+    }
+
     Expr *visitMagicIdentifierLiteralExpr(MagicIdentifierLiteralExpr *expr) {
       switch (expr->getKind()) {
 #define MAGIC_STRING_IDENTIFIER(NAME, STRING, SYNTAX_KIND) \

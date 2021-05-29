@@ -538,6 +538,14 @@ EXPR_NODES = [
                    is_optional=True),
          ]),
 
+    # TODO: Do we need a new token for single quote? That doesn't seem to
+    # appear anywhere. 
+    Node('PatternLiteralExpr', kind='Expr', children=[
+        Child('OpenQuote', kind='Token'),
+        Child('Segments', kind='StringLiteralSegments', collection_element_name='Segment'),
+        Child('CloseQuote', kind='Token')
+    ]),
+
     # e.g. "\a.b[2].a"
     Node('KeyPathExpr', kind='Expr',
          children=[

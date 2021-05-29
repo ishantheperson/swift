@@ -7384,7 +7384,8 @@ Parser::parseDeclEnumCase(ParseDeclOptions Flags,
       // The raw value must be syntactically a simple literal.
       LiteralRawValueExpr = dyn_cast<LiteralExpr>(RawValueExpr.getPtrOrNull());
       if (!LiteralRawValueExpr
-          || isa<InterpolatedStringLiteralExpr>(LiteralRawValueExpr)) {
+          || isa<InterpolatedStringLiteralExpr>(LiteralRawValueExpr)
+          || isa<PatternLiteralExpr>(LiteralRawValueExpr)) {
         diagnose(RawValueExpr.getPtrOrNull()->getLoc(),
                  diag::nonliteral_enum_case_raw_value);
         LiteralRawValueExpr = nullptr;
