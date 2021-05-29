@@ -2244,6 +2244,9 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
         case '*':
           quantifier = 2;
           break;
+        case '?':
+          quantifier = 3;
+          break;
         default:
           // Not a quantifier
           quantifier = 0;
