@@ -546,10 +546,6 @@ public protocol ExpressibleByPattern {
   // 4. Set TapExpr's SubExpr to a OpaqueExpr of type T.PatternInterpolation
   // 5. Finally in SILGenExpr.cpp we can call T.init using the result from TapExpr 
   init(patternInterpolation: PatternInterpolation)
-  
-  init()
-  // just for testing
-  mutating func sayHello()
 }
 
 public enum CaptureQuantifier: Equatable {
