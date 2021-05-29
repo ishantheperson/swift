@@ -2138,7 +2138,7 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
   SourceLoc EndLoc = Loc.getAdvancedLoc(Length);
 
   // The text inside the pattern literal (so excluding the single quotes)
-  StringRef str = Tok.getRawText().substr(1, Length - 1);
+  const StringRef str = Tok.getRawText().substr(1, Length - 1);
 
   consumeExtraToken(Tok);
   // TODO: Why is this here?
@@ -2149,7 +2149,8 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
   // CSApply.cpp after the constraints have been solved
   SmallVector<ASTNode, 4> bodyStatements;
 
-  // Declare the builder
+  // Declare the builder. We don't initialize it here, that's the job
+  // of TapExpr's SubExpr (which is set in CSApply.cpp)
   auto builderVarDecl =
       new (Context) VarDecl(/*IsStatic=*/false, VarDecl::Introducer::Var,
                             /*NameLoc=*/SourceLoc(),
@@ -2171,19 +2172,121 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
                                                  /*Implicit=*/true);
 
   // We now need to generate appropriate function calls. 
-  DeclNameRef sayHello(DeclName(Context, Context.Id_sayHello, ArrayRef<Identifier>()));
-  auto sayHelloRef = 
+  DeclNameRef appendPattern(DeclName(Context, 
+                                     Context.Id_appendPattern, 
+                                     {Identifier()}));
+  auto appendPatternRef = 
     new (Context) UnresolvedDotExpr(builderVarRef,
                                     SourceLoc(),
-                                    sayHello,
+                                    appendPattern,
                                     /*NameLoc=*/DeclNameLoc(),
                                     /*Implicit=*/true);
 
-  for (unsigned i = 0; i < str.size(); ++i) {
-    // Create a new node every time otherwise the 
-    // typechecker complains :shrug:
-    auto callHello = CallExpr::createImplicit(Context, sayHelloRef, {}, {});
-    bodyStatements.push_back(callHello);
+  DeclNameRef startCaptureGroup(DeclName(Context, 
+                                         Context.Id_startCaptureGroup, 
+                                         ArrayRef<Identifier>()));
+  auto startCaptureGroupRef = 
+    new (Context) UnresolvedDotExpr(builderVarRef,
+                                    SourceLoc(),
+                                    startCaptureGroup,
+                                    /*NameLoc=*/DeclNameLoc(),
+                                    /*Implicit=*/true);
+
+  DeclNameRef endCaptureGroup(DeclName(Context, 
+                                       Context.Id_endCaptureGroup, 
+                                       {Context.Id_quantifier}));
+  
+  auto endCaptureGroupRef = 
+    new (Context) UnresolvedDotExpr(builderVarRef,
+                                    SourceLoc(),
+                                    endCaptureGroup,
+                                    /*NameLoc=*/DeclNameLoc(),
+                                    /*Implicit=*/true);
+
+  const char *patternStart = str.begin();
+  for (const char *c = str.begin(); c != str.end(); ++c) {
+    switch (*c) {
+    case '(': 
+    case ')': {
+      // Emit a call to appendPattern for the last segment,
+      // but only if the range [patternStart, c) is nonempty
+      const StringRef substr(
+        /*Start=*/patternStart, 
+        /*Length=*/static_cast<size_t>(c - patternStart));
+      if (!substr.empty()) {
+        auto literal = new (Context) StringLiteralExpr(substr, Loc, true);
+        auto callAppendPattern = 
+          CallExpr::createImplicit(Context,
+                                   appendPatternRef,
+                                   /*Args=*/{literal},
+                                   /*ArgLabels=*/{});
+        bodyStatements.push_back(callAppendPattern);
+      }
+
+      // Handle capture group delimiter
+      if (*c == '(') {
+        // Emit a startCaptureGroup() call
+        auto callStartCaptureGroup = 
+          CallExpr::createImplicit(Context, 
+                                   startCaptureGroupRef, 
+                                   /*Args=*/{}, 
+                                   /*ArgLabels=*/{});
+        bodyStatements.push_back(callStartCaptureGroup);
+      } else {
+        assert(*c == ')');
+        
+        // Peek ahead for any potential quantifiers
+        unsigned char quantifier = c + 1 == str.end() ? 0 : *(c + 1);
+        switch (quantifier) {
+        case '+':
+          quantifier = 1; // TODO: replace with enum variant instead of magic numbers
+          break;
+        case '*':
+          quantifier = 2;
+          break;
+        default:
+          // Not a quantifier
+          quantifier = 0;
+        }
+
+        if (quantifier != 0) {
+          // Skip quantifier
+          assert(c != str.end() && "c should have room to advance");
+          c++; 
+        }
+
+        auto quantifierExpr = IntegerLiteralExpr::createFromUnsigned(Context, quantifier);
+        // Emit endCaptureGroup(quantifier: quantifier) call 
+        auto callEndCaptureGroup = 
+          CallExpr::createImplicit(Context,
+                                   endCaptureGroupRef,
+                                   /*Args=*/quantifierExpr,
+                                   /*ArgLabels=*/{Context.Id_quantifier});
+        bodyStatements.push_back(callEndCaptureGroup);
+      }
+
+      // In any case, set patternStart to the next char
+      patternStart = c + 1;
+      break;
+    } default: 
+      // Some other character
+      break;
+    }
+  }
+
+  // Special case: handle literal at the end
+  if (patternStart != str.end()) {
+    const StringRef substr(
+      /*Start=*/patternStart, 
+      /*Length=*/static_cast<size_t>(str.end() - patternStart));
+
+    auto literal = new (Context) StringLiteralExpr(substr, Loc, true);
+    auto callAppendPattern = 
+      CallExpr::createImplicit(Context,
+                                appendPatternRef,
+                                /*Args=*/{literal},
+                                /*ArgLabels=*/{});
+    bodyStatements.push_back(callAppendPattern);
   }
 
   auto tapBodyExpr = BraceStmt::create(Context, 
@@ -2194,6 +2297,9 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
 
   auto tapExpr = new (Context) TapExpr(/*SubExpr=*/nullptr, tapBodyExpr);
   auto expr = new (Context) PatternLiteralExpr(Loc, EndLoc, str, tapExpr);
+
+  llvm::errs() << "Created the expression\n";
+  expr->dump();
 
   ParserStatus Status;
   return makeParserResult(Status, expr);

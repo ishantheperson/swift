@@ -24,6 +24,7 @@
 #include "swift/AST/PrettyStackTrace.h"
 #include "swift/AST/SubstitutionMap.h"
 #include "swift/AST/TypeCheckRequests.h"
+#include "swift/AST/Types.h"
 #include "swift/Sema/ConstraintGraph.h"
 #include "swift/Sema/ConstraintSystem.h"
 #include "swift/Sema/IDETypeChecking.h"
@@ -1138,18 +1139,15 @@ namespace {
     }
 
     Type visitPatternLiteralExpr(PatternLiteralExpr *expr) {
-      // TODO
-      llvm::errs() << "Inside " << __PRETTY_FUNCTION__ << "\n";
-
       auto &ctx = CS.getASTContext();
       auto patternProto = TypeChecker::getProtocol(
         ctx, expr->getLoc(), 
-        KnownProtocolKind::ExpressibleByPatternInterpolation);
+        KnownProtocolKind::ExpressibleByPattern);
       
-      assert(patternProto && "Can't find protocol ExpressibleByPatternInterpolation");
+      assert(patternProto && "Can't find protocol ExpressibleByPattern");
 
       // The type of the expression must conform to the
-      // ExpressibleByPatternInterpolation protocol.
+      // ExpressibleByPattern protocol.
       auto locator = CS.getConstraintLocator(expr);
       auto tv = CS.createTypeVariable(locator,
                                       TVO_PrefersSubtypeBinding |
@@ -1160,10 +1158,22 @@ namespace {
                        patternProto->getDeclaredInterfaceType(),
                        locator);
 
-      TapExpr *builderExpr = expr->getBuildingExpr();
-      Type builderType = CS.getType(builderExpr);
-      auto builderLocator = CS.getConstraintLocator(builderExpr);
-      CS.addConstraint(ConstraintKind::Equal, builderType, tv, builderLocator);
+      auto associatedTypeDecl = 
+        patternProto->getAssociatedType(ctx.Id_PatternInterpolation);
+      assert(associatedTypeDecl && "Can't find PatternInterpolation associated type");
+      auto interpolationTV = DependentMemberType::get(tv, associatedTypeDecl);
+
+      TapExpr *appendingExpr = expr->getBuildingExpr();
+      Type appendingExprType = CS.getType(appendingExpr);
+      auto appendingLocator = CS.getConstraintLocator(appendingExpr);
+
+      // Must be Conversion; if it's Equal, then in semi-rare cases, the 
+      // interpolation temporary variable cannot be @lvalue.
+      CS.addConstraint(ConstraintKind::Conversion, appendingExprType,
+                        interpolationTV, appendingLocator);
+
+      // TODO: The expression has type 'tv'
+      // so we need to make sure that tv.Captured == <inferred capture type>
 
       return tv;
     }

@@ -30,6 +30,7 @@
 #include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/GenericSignature.h"
 #include "swift/AST/Initializer.h"
+#include "swift/AST/KnownProtocols.h"
 #include "swift/AST/OperatorNameLookup.h"
 #include "swift/AST/ParameterList.h"
 #include "swift/AST/ProtocolConformance.h"
@@ -2885,33 +2886,66 @@ namespace {
       auto &ctx = cs.getASTContext();
       auto loc = expr->getStartLoc();
 
-      StringRef str = expr->getPatternString();
-      llvm::errs() << "The string is " << str << "\n";
+      // Get the protocol ExpressibleByPattern
+      auto protocol = TypeChecker::getProtocol(ctx, loc, KnownProtocolKind::ExpressibleByPattern);
+      assert(protocol && "Missing protocol ExpressibleByPattern");
 
-      // TODO: look for an initializer?
-      auto proto = TypeChecker::getProtocol(ctx, loc, KnownProtocolKind::ExpressibleByPatternInterpolation);
-      assert(proto && "Missing protocol ExpressibleByPatternInterpolation");
-
-      auto conformance =
-        TypeChecker::conformsToProtocol(type, proto, cs.DC->getParentModule());
-      assert(conformance && "Deduced pattern literal type does not conform to ExpressibleByPatternInterpolation");
-      
-      // Create the name for init()
-      DeclName constructorName(ctx, DeclBaseName::createConstructor(), ArrayRef<Identifier>());
-
-      ConcreteDeclRef constructor = 
-        conformance.getWitnessByName(type->getRValueType(), constructorName);
-
-      if (!constructor) {
-        llvm::errs() << "Couldn't seem to get the constructor\n";
-        return nullptr;
-      }
-      if (!isa<AbstractFunctionDecl>(constructor.getDecl())) {
-        llvm::errs() << "Constructor isn't a function?\n";
+      // Get the type T.PatternInterpolation (T = openedType)
+      auto associatedTypeDecl =
+          protocol->getAssociatedType(ctx.Id_PatternInterpolation);
+      if (associatedTypeDecl == nullptr) {
+        // TODO: diagnostic
+        llvm::errs() << "Can't find the associated type PatternInterpolation\n";
+        // ctx.Diags.diagnose(expr->getStartLoc(),
+        //                    diag::interpolation_broken_proto);
         return nullptr;
       }
 
-      expr->setBuilderInit(constructor);
+      auto interpolationType =
+        simplifyType(DependentMemberType::get(openedType, associatedTypeDecl));
+
+      llvm::errs() << "interpolationType:\n";
+      interpolationType.dump();
+
+      // Function to get the constructor for a type
+      auto fetchProtocolInitWitness =
+          [&](KnownProtocolKind protocolKind, Type type,
+              ArrayRef<Identifier> argLabels) -> ConcreteDeclRef {
+        auto proto = TypeChecker::getProtocol(ctx, loc, protocolKind);
+        assert(proto && "Missing string interpolation protocol?");
+
+        auto conformance =
+          TypeChecker::conformsToProtocol(type, proto, cs.DC->getParentModule());
+        assert(conformance && "string interpolation type conforms to protocol");
+
+        DeclName constrName(ctx, DeclBaseName::createConstructor(), argLabels);
+
+        ConcreteDeclRef witness =
+            conformance.getWitnessByName(type->getRValueType(), constrName);
+        if (!witness || !isa<AbstractFunctionDecl>(witness.getDecl()))
+          return nullptr;
+        return witness;
+      };
+
+      // PatternInterpolationProtocol has init()
+      ConcreteDeclRef initPatternInterpolation = 
+        fetchProtocolInitWitness(KnownProtocolKind::PatternInterpolationProtocol, 
+                                 interpolationType, 
+                                 /*ArgLabels*/{});
+      llvm::errs() << "initPatternInterpolation:\n";
+      initPatternInterpolation.dump();
+
+      // ExpressibleByPattern has init(patternInterpolation: PatternInterpolation)
+      ConcreteDeclRef initExpressibleByPattern = 
+        fetchProtocolInitWitness(KnownProtocolKind::ExpressibleByPattern, 
+                                 type, 
+                                 {ctx.Id_patternInterpolation});
+
+      // Remember the constructors for use in
+      // SILGenExpr.cpp
+      expr->setBuilderInit(initPatternInterpolation);
+      // The initializer for the whole expression
+      expr->setInitializer(initExpressibleByPattern); 
 
       // Now that we have the constructor for the builder we can
       // set expr->setSubExpr
@@ -2928,12 +2962,16 @@ namespace {
       // cs.setType(callConstructor, type);
 
       auto callConstructor = 
-        new (ctx) OpaqueValueExpr(expr->getSourceRange(), type); 
-      cs.setType(callConstructor, type);
+        new (ctx) OpaqueValueExpr(expr->getSourceRange(), interpolationType); 
+      cs.setType(callConstructor, interpolationType);
       expr->setBuilderOpaqueNode(callConstructor);
 
       auto buildingExpr = expr->getBuildingExpr();
       buildingExpr->setSubExpr(callConstructor);
+
+      llvm::errs() << "expr:\n";
+      expr->dump();
+      llvm::errs() << "\n";
 
       return expr;
     }

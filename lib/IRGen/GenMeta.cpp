@@ -5138,7 +5138,7 @@ SpecialProtocol irgen::getSpecialProtocolID(ProtocolDecl *P) {
   case KnownProtocolKind::ExpressibleByFloatLiteral:
   case KnownProtocolKind::ExpressibleByIntegerLiteral:
   case KnownProtocolKind::ExpressibleByStringInterpolation:
-  case KnownProtocolKind::ExpressibleByPatternInterpolation:
+  case KnownProtocolKind::ExpressibleByPattern:
   case KnownProtocolKind::ExpressibleByStringLiteral:
   case KnownProtocolKind::ExpressibleByNilLiteral:
   case KnownProtocolKind::ExpressibleByUnicodeScalarLiteral:
@@ -5160,6 +5160,7 @@ SpecialProtocol irgen::getSpecialProtocolID(ProtocolDecl *P) {
   case KnownProtocolKind::Encodable:
   case KnownProtocolKind::Decodable:
   case KnownProtocolKind::StringInterpolationProtocol:
+  case KnownProtocolKind::PatternInterpolationProtocol:
   case KnownProtocolKind::AdditiveArithmetic:
   case KnownProtocolKind::Differentiable:
   case KnownProtocolKind::FloatingPoint:

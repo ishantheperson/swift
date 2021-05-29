@@ -214,10 +214,14 @@ IDENTIFIER(interpolationCount)
 IDENTIFIER(appendLiteral)
 IDENTIFIER(appendInterpolation)
 IDENTIFIER_WITH_NAME(dollarInterpolation, "$interpolation")
+
+IDENTIFIER(PatternInterpolation)
+IDENTIFIER(patternInterpolation)
+IDENTIFIER(appendPattern)
 IDENTIFIER(startCaptureGroup)
 IDENTIFIER(endCaptureGroup)
-// TODO: REMOVE THIS, TESTING ONLY
-IDENTIFIER(sayHello)
+IDENTIFIER(quantifier)
+
 IDENTIFIER(arrayLiteral)
 IDENTIFIER(dictionaryLiteral)
 IDENTIFIER(className)

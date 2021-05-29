@@ -927,7 +927,6 @@ class PatternLiteralExpr : public LiteralExpr {
   OpaqueValueExpr *BuilderOpaqueNode;
 
   // TODO: Add in interpolations. 
-
   ConcreteDeclRef BuilderInit;
 
 public:

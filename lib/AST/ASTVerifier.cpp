@@ -801,7 +801,6 @@ public:
     }
 
     bool shouldVerify(PatternLiteralExpr *expr) {
-      llvm::errs() << __PRETTY_FUNCTION__ << "\n";
       if (!shouldVerify(cast<Expr>(expr)))
         return false;
 
@@ -815,7 +814,6 @@ public:
     }
 
     void cleanup(PatternLiteralExpr *expr) {
-      llvm::errs() << __PRETTY_FUNCTION__ << "\n";
       assert(OpaqueValues.count(expr->getBuilderOpaqueNode()));
       OpaqueValues.erase(expr->getBuilderOpaqueNode());
     }    

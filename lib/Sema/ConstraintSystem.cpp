@@ -326,7 +326,7 @@ getAlternativeLiteralTypes(KnownProtocolKind kind) {
   case KnownProtocolKind::ExpressibleByColorLiteral: index = 10; break;
   case KnownProtocolKind::ExpressibleByImageLiteral: index = 11; break;
   case KnownProtocolKind::ExpressibleByFileReferenceLiteral: index = 12; break;
-  case KnownProtocolKind::ExpressibleByPatternInterpolation: index = 13; break;
+  case KnownProtocolKind::ExpressibleByPattern: index = 13; break;
   }
   static_assert(NumAlternativeLiteralTypes == 14, "Wrong # of literal types");
 
@@ -349,7 +349,7 @@ getAlternativeLiteralTypes(KnownProtocolKind kind) {
 
   case KnownProtocolKind::ExpressibleByExtendedGraphemeClusterLiteral:
   case KnownProtocolKind::ExpressibleByStringInterpolation:
-  case KnownProtocolKind::ExpressibleByPatternInterpolation:
+  case KnownProtocolKind::ExpressibleByPattern:
   case KnownProtocolKind::ExpressibleByStringLiteral:
   case KnownProtocolKind::ExpressibleByUnicodeScalarLiteral:
     break;

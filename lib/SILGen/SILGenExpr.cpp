@@ -2524,11 +2524,6 @@ visitInterpolatedStringLiteralExpr(InterpolatedStringLiteralExpr *E,
 
 RValue RValueEmitter::
 visitPatternLiteralExpr(PatternLiteralExpr *E, SGFContext C) {
-  // TODO: write this, not exactly sure what
-
-  llvm::errs() << "Visiting " << __PRETTY_FUNCTION__ << "\n";
-  E->dump(llvm::errs());
-  // Supposedly this interferes with compile time evaluation but :shrug:
   RValue interpolation;
   {
     TapExpr *ETap = E->getBuildingExpr();
@@ -2569,14 +2564,12 @@ visitPatternLiteralExpr(PatternLiteralExpr *E, SGFContext C) {
     interpolation = outerScope.popPreservingValue(std::move(result));
   }
 
-  return interpolation;
+  PreparedArguments resultInitArgs;
+  resultInitArgs.emplace(AnyFunctionType::Param(interpolation.getType()));
+  resultInitArgs.add(E, std::move(interpolation));
 
-  // PreparedArguments resultInitArgs;
-  // resultInitArgs.emplace(AnyFunctionType::Param(interpolation.getType()));
-  // resultInitArgs.add(E, std::move(interpolation));
-
-  // return SGF.emitApplyAllocatingInitializer(
-  //     E, E->getInitializer(), std::move(resultInitArgs), Type(), C);
+  return SGF.emitApplyAllocatingInitializer(
+      E, E->getInitializer(), std::move(resultInitArgs), Type(), C);
 }
 
 RValue RValueEmitter::
