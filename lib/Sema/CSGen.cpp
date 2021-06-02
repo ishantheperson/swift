@@ -1146,7 +1146,7 @@ namespace {
       
       assert(patternProto && "Can't find protocol ExpressibleByPattern");
 
-      // The type of the expression must conform to the
+      // The type of the expression 'tv' must conform to the
       // ExpressibleByPattern protocol.
       auto locator = CS.getConstraintLocator(expr);
       auto tv = CS.createTypeVariable(locator,
@@ -1158,6 +1158,8 @@ namespace {
                        patternProto->getDeclaredInterfaceType(),
                        locator);
 
+      // This helps us figure out what tv.PatternInterpolation is,
+      // so CSApply.cpp knows
       auto associatedTypeDecl = 
         patternProto->getAssociatedType(ctx.Id_PatternInterpolation);
       assert(associatedTypeDecl && "Can't find PatternInterpolation associated type");
@@ -1174,6 +1176,21 @@ namespace {
 
       // TODO: The expression has type 'tv'
       // so we need to make sure that tv.Captured == <inferred capture type>
+      // TypeRepr can be resolved using a method similar to resolveTypeReferenceInExpression
+      auto captureTypeDecl = patternProto->getAssociatedType(ctx.Id_Captured);
+      assert(captureTypeDecl && "Can't find Captured associated type");
+      auto captureTV = DependentMemberType::get(tv, captureTypeDecl);
+      auto captureType = 
+        resolveTypeReferenceInExpression(expr->getCaptureTypeRepr(), 
+                                         TypeResolverContext::InExpression, 
+                                         locator);
+      assert(captureType && "Error in resolving capture type: String/Array/Optional not defined?");
+      
+      llvm::errs() << "Resolved capture type:\n";
+      captureType->dump();
+
+      // tv.Captured ~ captureType
+      CS.addConstraint(ConstraintKind::Equal, captureTV, captureType, locator);
 
       return tv;
     }

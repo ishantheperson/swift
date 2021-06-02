@@ -928,19 +928,23 @@ class PatternLiteralExpr : public LiteralExpr {
 
   // TODO: Add in interpolations. 
   ConcreteDeclRef BuilderInit;
+  Type *CaptureType;
+  TypeRepr *CaptureTypeRepr;
 
 public:
   PatternLiteralExpr(SourceLoc Loc, 
                      SourceLoc TrailingQuoteLoc, 
                      StringRef PatternString, // TODO: remove this since it will all be in BuildingExpr
-                     TapExpr *BuildingExpr)
-      : LiteralExpr(ExprKind::PatternLiteral, /*ImplicitlyGenerated = */ false),
-        Loc(Loc),
-        TrailingQuoteLoc(TrailingQuoteLoc),
-        PatternString(PatternString),
-        BuildingExpr(BuildingExpr)
-    {
-    }
+                     TapExpr *BuildingExpr,
+                     TypeRepr *CaptureTypeRepr)
+    : LiteralExpr(ExprKind::PatternLiteral, /*ImplicitlyGenerated = */ false),
+      Loc(Loc),
+      TrailingQuoteLoc(TrailingQuoteLoc),
+      PatternString(PatternString),
+      BuildingExpr(BuildingExpr),
+      CaptureTypeRepr(CaptureTypeRepr)
+  {
+  }
 
   // These two are the same as in InterpolatedStringLiteral
 
@@ -954,10 +958,15 @@ public:
     return Loc;
   }
 
+  const StringRef getPatternString() const { return PatternString; }
+  TypeRepr *getCaptureTypeRepr() const { return CaptureTypeRepr; }
+
+  void setCaptureType(Type *type) { CaptureType = type; }
+  Type *getCaptureType() { return CaptureType; }
+
   void setBuildingExpr(TapExpr *expr) { BuildingExpr = expr; }
   TapExpr *getBuildingExpr() { return BuildingExpr; }
   
-  const StringRef getPatternString() const { return PatternString; }
 
   void setBuilderInit(ConcreteDeclRef builder) { BuilderInit = builder; }
   ConcreteDeclRef getBuilderInit() { return BuilderInit; }

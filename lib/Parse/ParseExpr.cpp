@@ -2128,7 +2128,6 @@ ParserResult<Expr> Parser::parseExprStringLiteral() {
 ///   expr-literal:
 ///     pattern_literal 
 ParserResult<Expr> Parser::parseExprPatternLiteral() {
-  llvm::errs() << "Got to parseExprPatternLiteral\n";
   // TODO: what is this for? 
   SyntaxParsingContext LocalContext(SyntaxContext,
                                     SyntaxKind::PatternLiteralExpr);
@@ -2203,7 +2202,25 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
                                     /*NameLoc=*/DeclNameLoc(),
                                     /*Implicit=*/true);
 
+  // We can create TupleTypes using TupleType::get() (CSGen.cpp 1712)
+  // We can create Substring using StructType
+  // and Array, Optional using BoundGenericStructType probably
+  // since those types are defined in Swift only
+  // SimpleIdentTypeRepr
+  // and GenericIdentTypeRepr
+  DeclNameRef stringDecl(DeclName(Context.Id_String));
+  TypeRepr *stringType =
+    new (Context) SimpleIdentTypeRepr(DeclNameLoc(Loc), stringDecl);
+
+  // ArrayTypeRepr
+  // TupleTypeRepr
+  // OptionalTypeRepr
+
+  // Capture groups
+  SmallVector<TupleTypeReprElement, 4> captureGroups;
+
   const char *patternStart = str.begin();
+  bool insideCaptureGroup = false;
   for (const char *c = str.begin(); c != str.end(); ++c) {
     switch (*c) {
     case '(': 
@@ -2225,6 +2242,8 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
 
       // Handle capture group delimiter
       if (*c == '(') {
+        assert(!insideCaptureGroup && "Nested capture groups not yet supported");
+        insideCaptureGroup = true;
         // Emit a startCaptureGroup() call
         auto callStartCaptureGroup = 
           CallExpr::createImplicit(Context, 
@@ -2233,22 +2252,39 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
                                    /*ArgLabels=*/{});
         bodyStatements.push_back(callStartCaptureGroup);
       } else {
+        assert(insideCaptureGroup && "Unbalanced closing paren");
         assert(*c == ')');
+        insideCaptureGroup = false;
         
+        // Figure out the type of just this capture group
+        // For now just stringtpye
+        // TODO: nested quantification means the element type will
+        // not always be stringType
+        auto captureGroupType = stringType; 
+
         // Peek ahead for any potential quantifiers
+        // and also record the type of this capture
+
         unsigned char quantifier = c + 1 == str.end() ? 0 : *(c + 1);
+        TypeRepr *quantifiedType;
         switch (quantifier) {
         case '+':
           quantifier = 1; // TODO: replace with enum variant instead of magic numbers
+          // Capture type is Array.
+          quantifiedType = new (Context) ArrayTypeRepr(captureGroupType, SourceRange(Loc, EndLoc));
           break;
         case '*':
           quantifier = 2;
+          quantifiedType = new (Context) ArrayTypeRepr(captureGroupType, SourceRange(Loc, EndLoc));
           break;
         case '?':
           quantifier = 3;
+          quantifiedType = new (Context) OptionalTypeRepr(captureGroupType, SourceLoc(Loc));
           break;
         default:
           // Not a quantifier
+          // Simply a string
+          quantifiedType = captureGroupType;
           quantifier = 0;
         }
 
@@ -2258,8 +2294,10 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
           c++; 
         }
 
-        auto quantifierExpr = IntegerLiteralExpr::createFromUnsigned(Context, quantifier);
+        captureGroups.emplace_back(quantifiedType);
+
         // Emit endCaptureGroup(quantifier: quantifier) call 
+        auto quantifierExpr = IntegerLiteralExpr::createFromUnsigned(Context, quantifier);
         auto callEndCaptureGroup = 
           CallExpr::createImplicit(Context,
                                    endCaptureGroupRef,
@@ -2278,6 +2316,7 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
   }
 
   // Special case: handle literal at the end
+  assert(!insideCaptureGroup && "Unbalanced open paren");
   if (patternStart != str.end()) {
     const StringRef substr(
       /*Start=*/patternStart, 
@@ -2292,6 +2331,12 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
     bodyStatements.push_back(callAppendPattern);
   }
 
+  // Create the capture type
+  TypeRepr *captureType = 
+    captureGroups.size() == 1 
+      ? captureGroups[0].Type
+      : TupleTypeRepr::create(Context, captureGroups, SourceRange());
+
   auto tapBodyExpr = BraceStmt::create(Context, 
                                        Loc, 
                                        bodyStatements, 
@@ -2299,10 +2344,7 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
                                        /*Implicit=*/true);
 
   auto tapExpr = new (Context) TapExpr(/*SubExpr=*/nullptr, tapBodyExpr);
-  auto expr = new (Context) PatternLiteralExpr(Loc, EndLoc, str, tapExpr);
-
-  llvm::errs() << "Created the expression\n";
-  expr->dump();
+  auto expr = new (Context) PatternLiteralExpr(Loc, EndLoc, str, tapExpr, captureType);
 
   ParserStatus Status;
   return makeParserResult(Status, expr);

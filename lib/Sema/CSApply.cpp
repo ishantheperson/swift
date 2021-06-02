@@ -2947,20 +2947,6 @@ namespace {
       // The initializer for the whole expression
       expr->setInitializer(initExpressibleByPattern); 
 
-      // Now that we have the constructor for the builder we can
-      // set expr->setSubExpr
-      // auto constructorDeclRef = 
-      //   new (ctx) DeclRefExpr(constructor, 
-      //                         DeclNameLoc(), 
-      //                         /*Implicit=*/true, 
-      //                         AccessSemantics::Ordinary,
-      //                         type);
-      // auto callConstructor = 
-      //   CallExpr::createImplicit(ctx, constructorDeclRef, ArrayRef<Expr*>{}, ArrayRef<Identifier>{});
-      // callConstructor->setType(type);
-      // callConstructor->setThrows(false);
-      // cs.setType(callConstructor, type);
-
       auto callConstructor = 
         new (ctx) OpaqueValueExpr(expr->getSourceRange(), interpolationType); 
       cs.setType(callConstructor, interpolationType);
@@ -2969,7 +2955,7 @@ namespace {
       auto buildingExpr = expr->getBuildingExpr();
       buildingExpr->setSubExpr(callConstructor);
 
-      llvm::errs() << "expr:\n";
+      llvm::errs() << "Generated expr:\n";
       expr->dump();
       llvm::errs() << "\n";
 

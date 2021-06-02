@@ -545,6 +545,9 @@ class Traversal : public ASTVisitor<Traversal, Expr*, Stmt*,
       else
         return nullptr;
     }
+
+    // TODO: should we call doIt() on E->getCaptureTypeRepr() ?
+
     return E;
   }
 
