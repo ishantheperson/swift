@@ -223,7 +223,7 @@ IDENTIFIER(endCaptureGroup)
 IDENTIFIER(quantifier)
 IDENTIFIER(Captured)
 IDENTIFIER(Array)
-IDENTIFIER(String)
+IDENTIFIER(Substring)
 
 IDENTIFIER(arrayLiteral)
 IDENTIFIER(dictionaryLiteral)

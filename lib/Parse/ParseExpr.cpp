@@ -2208,7 +2208,7 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
   // since those types are defined in Swift only
   // SimpleIdentTypeRepr
   // and GenericIdentTypeRepr
-  DeclNameRef stringDecl(DeclName(Context.Id_String));
+  DeclNameRef stringDecl(DeclName(Context.Id_Substring));
   TypeRepr *stringType =
     new (Context) SimpleIdentTypeRepr(DeclNameLoc(Loc), stringDecl);
 
@@ -2270,7 +2270,8 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
         switch (quantifier) {
         case '+':
           quantifier = 1; // TODO: replace with enum variant instead of magic numbers
-          // Capture type is Array.
+          // If Swift ever gets a NonEmpty type 
+          // then this would be a great place to use this.
           quantifiedType = new (Context) ArrayTypeRepr(captureGroupType, SourceRange(Loc, EndLoc));
           break;
         case '*':
