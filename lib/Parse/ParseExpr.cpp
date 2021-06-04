@@ -2217,10 +2217,13 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
   // OptionalTypeRepr
 
   // Capture groups
-  SmallVector<TupleTypeReprElement, 4> captureGroups;
+  SmallVector<TupleTypeReprElement, 4> captureGroupTypes;
+  SmallVector<SmallVector<TupleTypeReprElement, 4>, 3> captureGroupStack;
 
   const char *patternStart = str.begin();
-  bool insideCaptureGroup = false;
+  
+  // Keep a sta
+
   for (const char *c = str.begin(); c != str.end(); ++c) {
     switch (*c) {
     case '(': 
@@ -2242,8 +2245,10 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
 
       // Handle capture group delimiter
       if (*c == '(') {
-        assert(!insideCaptureGroup && "Nested capture groups not yet supported");
-        insideCaptureGroup = true;
+        // Save the old stack 
+        captureGroupStack.push_back(std::move(captureGroupTypes));
+        captureGroupTypes.clear();
+
         // Emit a startCaptureGroup() call
         auto callStartCaptureGroup = 
           CallExpr::createImplicit(Context, 
@@ -2252,19 +2257,29 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
                                    /*ArgLabels=*/{});
         bodyStatements.push_back(callStartCaptureGroup);
       } else {
-        assert(insideCaptureGroup && "Unbalanced closing paren");
         assert(*c == ')');
-        insideCaptureGroup = false;
-        
-        // Figure out the type of just this capture group
-        // For now just stringtpye
-        // TODO: nested quantification means the element type will
-        // not always be stringType
-        auto captureGroupType = stringType; 
+        assert(!captureGroupStack.empty() && "Missing open paren for closed paren");
+                
+        // Figure out the type of the capture group that just ended.
+        // Usually it will be a tuple of the things captured,
+        // but if there's only item then we should extract it.
+        // However, if there are no nested captures, then 
+        // we capture the whole thing as a Substring
+        // TODO: extract to function
+        TypeRepr *captureGroupType;
+        switch (captureGroupTypes.size()) {
+        case 0: captureGroupType = stringType; break;
+        case 1: captureGroupType = captureGroupTypes.front().Type; break;
+        default: 
+          captureGroupType = TupleTypeRepr::create(Context, captureGroupTypes, SourceRange());
+          break; 
+        }
+
+        // Restore 'captureGroupTypes' to whatever it was before
+        captureGroupTypes = captureGroupStack.pop_back_val();
 
         // Peek ahead for any potential quantifiers
         // and also record the type of this capture
-
         unsigned char quantifier = c + 1 == str.end() ? 0 : *(c + 1);
         TypeRepr *quantifiedType;
         switch (quantifier) {
@@ -2295,7 +2310,7 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
           c++; 
         }
 
-        captureGroups.emplace_back(quantifiedType);
+        captureGroupTypes.emplace_back(quantifiedType);
 
         // Emit endCaptureGroup(quantifier: quantifier) call 
         auto quantifierExpr = IntegerLiteralExpr::createFromUnsigned(Context, quantifier);
@@ -2316,8 +2331,8 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
     }
   }
 
-  // Special case: handle literal at the end
-  assert(!insideCaptureGroup && "Unbalanced open paren");
+  // Special case: handle literal string at the end
+  assert(captureGroupStack.empty() && "Unbalanced open paren");
   if (patternStart != str.end()) {
     const StringRef substr(
       /*Start=*/patternStart, 
@@ -2333,10 +2348,14 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
   }
 
   // Create the capture type
-  TypeRepr *captureType = 
-    captureGroups.size() == 1 
-      ? captureGroups[0].Type
-      : TupleTypeRepr::create(Context, captureGroups, SourceRange());
+  TypeRepr *captureType;
+  switch (captureGroupTypes.size()) {
+  case 0: captureType = stringType; break;
+  case 1: captureType = captureGroupTypes.front().Type; break;
+  default: 
+    captureType = TupleTypeRepr::create(Context, captureGroupTypes, SourceRange());
+    break; 
+  }
 
   auto tapBodyExpr = BraceStmt::create(Context, 
                                        Loc, 

@@ -2881,8 +2881,6 @@ namespace {
       auto type = simplifyType(openedType);
       cs.setType(expr, type);
 
-      llvm::errs() << "Got to " << __PRETTY_FUNCTION__  << "\n";
-
       auto &ctx = cs.getASTContext();
       auto loc = expr->getStartLoc();
 
@@ -2903,9 +2901,6 @@ namespace {
 
       auto interpolationType =
         simplifyType(DependentMemberType::get(openedType, associatedTypeDecl));
-
-      llvm::errs() << "interpolationType:\n";
-      interpolationType.dump();
 
       // Function to get the constructor for a type
       auto fetchProtocolInitWitness =
@@ -2932,8 +2927,6 @@ namespace {
         fetchProtocolInitWitness(KnownProtocolKind::PatternInterpolationProtocol, 
                                  interpolationType, 
                                  /*ArgLabels*/{});
-      llvm::errs() << "initPatternInterpolation:\n";
-      initPatternInterpolation.dump();
 
       // ExpressibleByPattern has init(patternInterpolation: PatternInterpolation)
       ConcreteDeclRef initExpressibleByPattern = 
@@ -2954,10 +2947,6 @@ namespace {
 
       auto buildingExpr = expr->getBuildingExpr();
       buildingExpr->setSubExpr(callConstructor);
-
-      llvm::errs() << "Generated expr:\n";
-      expr->dump();
-      llvm::errs() << "\n";
 
       return expr;
     }
