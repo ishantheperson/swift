@@ -527,8 +527,7 @@ class SourceEditTextConsumer : public SourceEditConsumer {
   llvm::raw_ostream &OS;
 
 public:
-  SourceEditTextConsumer(llvm::raw_ostream &OS);
-
+  SourceEditTextConsumer(llvm::raw_ostream &OS) : OS(OS) {}
   void accept(SourceManager &SM, RegionType RegionType,
               ArrayRef<Replacement> Replacements) override;
 };
@@ -542,6 +541,18 @@ public:
   SourceEditOutputConsumer(SourceManager &SM, unsigned BufferId, llvm::raw_ostream &OS);
   ~SourceEditOutputConsumer();
   void accept(SourceManager &SM, RegionType RegionType, ArrayRef<Replacement> Replacements) override;
+};
+
+/// Broadcasts `accept` to all `Consumers`
+class BroadcastingSourceEditConsumer : public SourceEditConsumer {
+  ArrayRef<std::unique_ptr<SourceEditConsumer>> Consumers;
+
+public:
+  BroadcastingSourceEditConsumer(
+      ArrayRef<std::unique_ptr<SourceEditConsumer>> Consumers)
+      : Consumers(Consumers) {}
+  void accept(SourceManager &SM, RegionType RegionType,
+              ArrayRef<Replacement> Replacements) override;
 };
 
 enum class LabelRangeEndAt: int8_t {

@@ -792,14 +792,6 @@ ERROR(serialization_fatal,Fatal,
       "fatal error encountered while reading from module '%0'; "
       SWIFT_BUG_REPORT_MESSAGE,
       (StringRef))
-NOTE(serialization_misc_version,none,
-     "module '%0' full misc version is '%1'"
-     "%select{ (built while allowing compiler errors)|}2",
-     (StringRef, StringRef, bool))
-NOTE(serialization_compatibility_version_mismatch,none,
-     "compiling as Swift %0, with '%1' built as Swift %2 "
-     "(this is supported but may expose additional compiler issues)",
-     (StringRef, StringRef, StringRef))
 
 ERROR(serialization_invalid_decl,Fatal,
       "deserialized invalid declaration %0 (%1) in module '%2'",
@@ -4520,23 +4512,12 @@ ERROR(concurrent_value_inherit,none,
       "%select{| other than 'NSObject'}0",
       (bool, DeclName))
 
-ERROR(actorindependent_let,none,
-      "'@actorIndependent' is meaningless on 'let' declarations because "
-      "they are immutable",
-      ())
-ERROR(actorindependent_mutable_storage,none,
-      "'@actorIndependent' can not be applied to stored properties",
-      ())
-ERROR(actorindependent_local_var,none,
-      "'@actorIndependent' can not be applied to local variables",
-      ())
-
 ERROR(nonisolated_let,none,
       "'nonisolated' is meaningless on 'let' declarations because "
       "they are immutable",
       ())
 ERROR(nonisolated_mutable_storage,none,
-      "nonisolated' can not be applied to stored properties",
+      "'nonisolated' can not be applied to stored properties",
       ())
 ERROR(nonisolated_local_var,none,
       "'nonisolated' can not be applied to local variables",

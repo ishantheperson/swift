@@ -99,6 +99,16 @@ namespace swift {
     /// performed.
     llvm::Optional<llvm::Triple> TargetVariant;
 
+    /// The target triple to instantiate the internal clang instance.
+    /// When not specified, the compiler will use the value of -target to
+    /// instantiate the clang instance.
+    /// This is mainly used to avoid lowering the target triple to use for clang when
+    /// importing a .swiftinterface whose -target value may be different from
+    /// the loading module.
+    /// The lowering triple may result in multiple versions of the same Clang
+    /// modules being built.
+    llvm::Optional<llvm::Triple> ClangTarget;
+
     /// The SDK version, if known.
     Optional<llvm::VersionTuple> SDKVersion;
 
@@ -427,6 +437,20 @@ namespace swift {
     ASTVerifierOverrideKind ASTVerifierOverride =
         ASTVerifierOverrideKind::NoOverride;
 
+    /// Whether the new experimental generics implementation is enabled.
+    bool EnableRequirementMachine = false;
+
+    /// Enables debugging output from the requirement machine.
+    bool DebugRequirementMachine = false;
+
+    /// Maximum iteration count for requirement machine confluent completion
+    /// algorithm.
+    unsigned RequirementMachineStepLimit = 1000;
+
+    /// Maximum term length for requirement machine confluent completion
+    /// algorithm.
+    unsigned RequirementMachineDepthLimit = 10;
+
     /// Sets the target we are building for and updates platform conditions
     /// to match.
     ///
@@ -563,6 +587,9 @@ namespace swift {
     /// Flags for developers
     ///
 
+    /// Debug the generic signatures computed by the generic signature builder.
+    bool DebugGenericSignatures = false;
+
     /// Whether we are debugging the constraint solver.
     ///
     /// This option enables verbose debugging output from the constraint
@@ -576,9 +603,6 @@ namespace swift {
     /// Line numbers to activate the constraint solver debugger.
     /// Should be stored sorted.
     llvm::SmallVector<unsigned, 4> DebugConstraintSolverOnLines;
-
-    /// Debug the generic signatures computed by the generic signature builder.
-    bool DebugGenericSignatures = false;
 
     /// Triggers llvm fatal_error if typechecker tries to typecheck a decl or an
     /// identifier reference with the provided prefix name.

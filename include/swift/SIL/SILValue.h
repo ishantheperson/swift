@@ -875,6 +875,7 @@ inline OwnershipConstraint OperandOwnership::getOwnershipConstraint() {
   case OperandOwnership::Reborrow:
     return {OwnershipKind::Guaranteed, UseLifetimeConstraint::LifetimeEnding};
   }
+  llvm_unreachable("covered switch");
 }
 
 /// Return true if this use can accept Unowned values.
@@ -900,6 +901,7 @@ inline bool canAcceptUnownedValue(OperandOwnership operandOwnership) {
   case OperandOwnership::Reborrow:
     return false;
   }
+  llvm_unreachable("covered switch");
 }
 
 /// Return the OperandOwnership for a forwarded operand when the forwarding
@@ -1036,6 +1038,9 @@ public:
   /// associated value, either by consuming the owned value or ending the
   /// guaranteed scope.
   bool isLifetimeEnding() const;
+
+  /// Returns true if this ends the lifetime of an owned operand.
+  bool isConsuming() const;
 
   SILBasicBlock *getParentBlock() const;
   SILFunction *getParentFunction() const;

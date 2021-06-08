@@ -844,3 +844,33 @@ func testPreserveComments3() {
 // PRESERVE-TRAILING-COMMENT-CALL:      let s = await simple()
 // PRESERVE-TRAILING-COMMENT-CALL-NEXT: print(s)
 // PRESERVE-TRAILING-COMMENT-CALL-NOT:  // make sure we pickup this trailing comment if we're converting the function, but not the call
+
+class TestConvertFunctionWithCallToFunctionsWithSpecialName {
+  required init() {}
+  subscript(index: Int) -> Int { return index }
+
+// RUN: %refactor -convert-to-async -dump-text -source-filename %s -pos=%(line+1):3
+  static func example() -> Self {
+    let x = self.init()
+    _ = x[1]
+    return x
+  }
+}
+
+// rdar://78781061
+// RUN: %refactor -convert-to-async -dump-text -source-filename %s -pos=%(line+1):1 | %FileCheck -check-prefix=FOR-IN-WHERE %s
+func testForInWhereRefactoring() {
+  let arr: [String] = []
+  for str in arr where str.count != 0 {
+    simple { res in
+      print(res)
+    }
+  }
+}
+// FOR-IN-WHERE:      func testForInWhereRefactoring() async {
+// FOR-IN-WHERE-NEXT:   let arr: [String] = []
+// FOR-IN-WHERE-NEXT:   for str in arr where str.count != 0 {
+// FOR-IN-WHERE-NEXT:     let res = await simple()
+// FOR-IN-WHERE-NEXT:     print(res)
+// FOR-IN-WHERE-NEXT:   }
+// FOR-IN-WHERE-NEXT: }

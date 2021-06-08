@@ -1082,6 +1082,14 @@ def target_variant : Separate<["-"], "target-variant">,
   HelpText<"Generate 'zippered' code for macCatalyst that can run on the specified"
            " variant target triple in addition to the main -target triple">;
 
+def clang_target : Separate<["-"], "clang-target">,
+  Flags<[FrontendOption, SwiftAPIExtractOption, SwiftSymbolGraphExtractOption, SwiftAPIDigesterOption]>,
+  HelpText<"Separately set the target we should use for internal Clang instance">;
+
+def disable_clang_target : Separate<["-"], "disable-clang-target">,
+  Flags<[NewDriverOnlyOption]>,
+  HelpText<"Disable a separately specified target triple for Clang instance to use">;
+
 def profile_generate : Flag<["-"], "profile-generate">,
   Flags<[FrontendOption, NoInteractiveOption]>,
   HelpText<"Generate instrumented code to collect execution counts">;
@@ -1193,12 +1201,6 @@ def user_module_version : Separate<["-"], "user-module-version">,
   HelpText<"Module version specified from Swift module authors">,
   MetaVarName<"<vers>">;
 
-// LLVM verification
-def skip_swifttailcc_musttail_check : Flag<["-"], "skip-swifttailcc-musttail-check">,
-  Flags<[HelpHidden, DoesNotAffectIncrementalBuild]>,
-  HelpText<"Skip additional LLVM verification that all tail calls from "
-           "swifttailcc->swifttailcc are marked musttail.">;
-
 // VFS
 
 def vfsoverlay : JoinedOrSeparate<["-"], "vfsoverlay">,
@@ -1257,6 +1259,11 @@ def skip_inherited_docs : Flag<["-"], "skip-inherited-docs">,
          NoInteractiveOption, SupplementaryOutput, HelpHidden]>,
   HelpText<"Skip emitting doc comments for members inherited through classes or "
            "default implementations">;
+
+def include_spi_symbols : Flag<["-"], "include-spi-symbols">,
+  Flags<[SwiftSymbolGraphExtractOption, FrontendOption,
+         NoInteractiveOption, SupplementaryOutput, HelpHidden]>,
+  HelpText<"Add symbols with SPI information to the symbol graph">;
 
 // swift-api-digester-only options
 def dump_sdk: Flag<["-", "--"], "dump-sdk">,

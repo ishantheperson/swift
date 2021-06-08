@@ -44,7 +44,7 @@ private:
   // TODO: more additional flags here, we can use them for future optimizations.
   //       e.g. "was awaited on" or "needs free"
 
-  friend class AsyncTask;
+  friend class ::swift::AsyncTask;
 
 public:
   explicit AsyncLetImpl(AsyncTask* task)
@@ -163,7 +163,8 @@ static void swift_asyncLet_endImpl(AsyncLet *alet) {
   assert(parent && "async-let must have a parent task");
 
 #if SWIFT_TASK_PRINTF_DEBUG
-  fprintf(stderr, "[%p] async let end of task %p, parent: %p\n", pthread_self(), task, parent);
+  fprintf(stderr, "[%lu] async let end of task %p, parent: %p\n",
+          _swift_get_thread_id(), task, parent);
 #endif
   _swift_task_dealloc_specific(parent, task);
 }
