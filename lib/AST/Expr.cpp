@@ -15,7 +15,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "swift/AST/Expr.h"
-#include "swift/Basic/Statistic.h"
 #include "swift/Basic/Unicode.h"
 #include "swift/AST/ASTContext.h"
 #include "swift/AST/ASTVisitor.h"
@@ -2410,6 +2409,41 @@ void KeyPathExpr::Component::setSubscriptIndexHashableConformances(
   case Kind::TupleElement:
   case Kind::DictionaryKey:
     llvm_unreachable("no hashable conformances for this kind");
+  }
+}
+
+TypeRepr *PatternLiteralExpr::CaptureStructure::toTypeRepr(
+  ASTContext &ctx,
+  SourceRange range,
+  const std::vector<Type> interpolationTypes) const 
+{
+  DeclNameRef stringDecl(DeclName(ctx.Id_Substring));
+  switch (getKind()) {
+  case CaptureKind::Substring:
+    return new (ctx) SimpleIdentTypeRepr(DeclNameLoc(range.Start), stringDecl);
+
+  case CaptureKind::Tuple: {
+    auto elems = getElements();
+    std::vector<TupleTypeReprElement> tupleElems;
+    std::transform(
+      elems.begin(), elems.end(), std::back_inserter(tupleElems), 
+      [&](const PatternLiteralExpr::CaptureStructure &elem) {
+        return elem.toTypeRepr(ctx, range, interpolationTypes);
+      });
+    
+    return TupleTypeRepr::create(ctx, tupleElems, SourceRange());
+  }
+  
+  case CaptureKind::Array:
+    return new (ctx) ArrayTypeRepr(getInner()->toTypeRepr(ctx, range, interpolationTypes), range);
+  
+  case CaptureKind::Optional:
+    return new (ctx) OptionalTypeRepr(getInner()->toTypeRepr(ctx, range, interpolationTypes), range.Start);
+  case CaptureKind::Interpolation:
+    return new (ctx) FixedTypeRepr(interpolationTypes.at(getIndex()), SourceLoc());
+
+  case CaptureKind::Invalid:
+    llvm_unreachable("Calling toTypeRepr on an invalid CaptureStructure");
   }
 }
 

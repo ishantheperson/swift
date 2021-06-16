@@ -2926,7 +2926,7 @@ namespace {
       ConcreteDeclRef initPatternInterpolation = 
         fetchProtocolInitWitness(KnownProtocolKind::PatternInterpolationProtocol, 
                                  interpolationType, 
-                                 /*ArgLabels*/{});
+                                 /*ArgLabels=*/{});
 
       // ExpressibleByPattern has init(patternInterpolation: PatternInterpolation)
       ConcreteDeclRef initExpressibleByPattern = 

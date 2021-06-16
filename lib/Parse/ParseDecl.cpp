@@ -206,6 +206,7 @@ void Parser::parseTopLevel(SmallVectorImpl<Decl *> &decls) {
   for (auto item : items) {
     auto *decl = item.get<Decl *>();
     assert(!isa<AccessorDecl>(decl) && "accessors should not be added here");
+    // decl->dump();
     decls.push_back(decl);
   }
 

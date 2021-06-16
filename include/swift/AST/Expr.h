@@ -30,6 +30,7 @@
 #include "swift/Basic/Debug.h"
 #include "swift/Basic/InlineBitfield.h"
 #include "llvm/Support/TrailingObjects.h"
+#include <memory>
 #include <utility>
 
 namespace llvm {
@@ -919,30 +920,93 @@ public:
 };
 
 class PatternLiteralExpr : public LiteralExpr {
-  SourceLoc Loc;
-  SourceLoc TrailingQuoteLoc;
-
-  StringRef PatternString;
-  TapExpr *BuildingExpr;
-  OpaqueValueExpr *BuilderOpaqueNode;
-
-  // TODO: Add in interpolations. 
-  ConcreteDeclRef BuilderInit;
-  Type *CaptureType;
-  TypeRepr *CaptureTypeRepr;
-
 public:
+  enum class CaptureKind {
+    Substring,
+    Tuple,
+    Array,
+    Optional,
+    Interpolation,
+
+    Invalid
+  };
+
+  class CaptureStructure {
+    CaptureKind Kind;
+    std::unique_ptr<CaptureStructure> Inner;
+    std::vector<CaptureStructure> Elements;
+    size_t Index;
+
+    CaptureStructure(CaptureKind kind) : Kind(kind) { }
+
+    CaptureStructure(CaptureKind kind, std::vector<CaptureStructure> &&elems)
+      : Kind(kind), Elements(std::move(elems)) { }
+
+    CaptureStructure(CaptureKind kind, CaptureStructure &&elem)
+      : Kind(kind), Inner(new CaptureStructure(std::move(elem))) { }
+    
+    CaptureStructure(CaptureKind kind, size_t index)
+      : Kind(kind), Index(index) { }
+    
+    CaptureKind getKind() const {
+      assert(Kind != CaptureKind::Invalid);
+      return Kind;
+    }
+
+    const CaptureStructure *getInner() const {
+      assert(Kind == CaptureKind::Optional || Kind == CaptureKind::Array);
+      return Inner.get();
+    }
+
+    ArrayRef<CaptureStructure> getElements() const {
+      assert(Kind == CaptureKind::Tuple);
+      return Elements;
+    }
+
+    size_t getIndex() const {
+      assert(Kind == CaptureKind::Interpolation);
+      return Index;
+    }
+
+  public:
+    CaptureStructure() : Kind(CaptureKind::Invalid) { }
+
+    static CaptureStructure createSubstring() {
+      return CaptureStructure(CaptureKind::Substring);
+    }
+
+    static CaptureStructure createTuple(std::vector<CaptureStructure> &&elems) {
+      return CaptureStructure(CaptureKind::Tuple, std::move(elems));
+    }
+
+    static CaptureStructure createArray(CaptureStructure &&inner) {
+      return CaptureStructure(CaptureKind::Array, std::move(inner));
+    }
+
+    static CaptureStructure createOptional(CaptureStructure &&inner) {
+      return CaptureStructure(CaptureKind::Optional, std::move(inner));
+    }
+
+    static CaptureStructure createInterpolation(size_t index) {
+      return CaptureStructure(CaptureKind::Interpolation, index);
+    }
+
+    TypeRepr *toTypeRepr(ASTContext &ctx, 
+                         SourceRange range,
+                         const std::vector<Type> interpolationTypes) const;
+  };
+
   PatternLiteralExpr(SourceLoc Loc, 
                      SourceLoc TrailingQuoteLoc, 
                      StringRef PatternString, // TODO: remove this since it will all be in BuildingExpr
                      TapExpr *BuildingExpr,
-                     TypeRepr *CaptureTypeRepr)
+                     CaptureStructure &&Structure)
     : LiteralExpr(ExprKind::PatternLiteral, /*ImplicitlyGenerated = */ false),
       Loc(Loc),
       TrailingQuoteLoc(TrailingQuoteLoc),
       PatternString(PatternString),
       BuildingExpr(BuildingExpr),
-      CaptureTypeRepr(CaptureTypeRepr)
+      CaptureTypeStructure(new CaptureStructure(std::move(Structure)))
   {
   }
 
@@ -959,7 +1023,16 @@ public:
   }
 
   const StringRef getPatternString() const { return PatternString; }
-  TypeRepr *getCaptureTypeRepr() const { return CaptureTypeRepr; }
+  
+  const CaptureStructure* getCaptureTypeStructure() const { 
+    assert(CaptureTypeStructure != nullptr && "Use-after-free");
+    return CaptureTypeStructure; 
+  }
+
+  void deleteCaptureTypeStructure() {
+    delete CaptureTypeStructure;
+    CaptureTypeStructure = nullptr;
+  }
 
   void setCaptureType(Type *type) { CaptureType = type; }
   Type *getCaptureType() { return CaptureType; }
@@ -967,7 +1040,6 @@ public:
   void setBuildingExpr(TapExpr *expr) { BuildingExpr = expr; }
   TapExpr *getBuildingExpr() { return BuildingExpr; }
   
-
   void setBuilderInit(ConcreteDeclRef builder) { BuilderInit = builder; }
   ConcreteDeclRef getBuilderInit() { return BuilderInit; }
 
@@ -976,7 +1048,21 @@ public:
 
   static bool classof(const Expr *E) {
     return E->getKind() == ExprKind::PatternLiteral;
-  }  
+  }
+
+private:
+  SourceLoc Loc;
+  SourceLoc TrailingQuoteLoc;
+
+  StringRef PatternString;
+  TapExpr *BuildingExpr;
+  OpaqueValueExpr *BuilderOpaqueNode;
+
+  // TODO: Add in interpolations. 
+  ConcreteDeclRef BuilderInit;
+  Type *CaptureType;
+  // Manually managed since it is not trivially destructible
+  CaptureStructure *CaptureTypeStructure;
 };
 
 /// InterpolatedStringLiteral - An interpolated string literal.

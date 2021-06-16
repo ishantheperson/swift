@@ -20,6 +20,7 @@
 #include "swift/AST/ASTWalker.h"
 #include "swift/AST/Expr.h"
 #include "swift/AST/GenericSignature.h"
+#include "swift/AST/LayoutConstraint.h"
 #include "swift/AST/ParameterList.h"
 #include "swift/AST/PrettyStackTrace.h"
 #include "swift/AST/SubstitutionMap.h"
@@ -30,8 +31,8 @@
 #include "swift/Sema/IDETypeChecking.h"
 #include "swift/Subsystems.h"
 #include "llvm/ADT/APInt.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include <utility>
@@ -1174,23 +1175,84 @@ namespace {
       CS.addConstraint(ConstraintKind::Conversion, appendingExprType,
                         interpolationTV, appendingLocator);
 
-      // TODO: The expression has type 'tv'
+      // Construct our own tree representation of the capture type
+      // with 'holes' for interpolated types. Then here, we can construct
+      // the TypeRepr (similar to how we currently do it in ParseExpr.cpp)
+      // and potentially create type variables for 
+
+      // Mapping from the left-to-right index of which interpolation this is
+      // to the capture type
+      std::vector<Type> interpolationTypes;
+
+      // The expression has type 'tv'
       // so we need to make sure that tv.Captured == <inferred capture type>
       // TypeRepr can be resolved using a method similar to resolveTypeReferenceInExpression
       auto captureTypeDecl = patternProto->getAssociatedType(ctx.Id_Captured);
       assert(captureTypeDecl && "Can't find Captured associated type");
       auto captureTV = DependentMemberType::get(tv, captureTypeDecl);
-      auto captureType = 
-        resolveTypeReferenceInExpression(expr->getCaptureTypeRepr(), 
+
+      for (const auto &elem : appendingExpr->getBody()->getElements()) {
+        // Do a lot of work to check
+        // if this is a call to appendInterpolation
+        // and then get the argument 
+        auto *e = elem.dyn_cast<Expr *>();
+        if (e == nullptr) { continue; }
+
+        auto *callExpr = dyn_cast<CallExpr>(e);
+        if (callExpr == nullptr) { continue; }
+
+        auto *dotExpr = dyn_cast<UnresolvedDotExpr>(callExpr->getDirectCallee());
+        if (dotExpr == nullptr) { continue; }
+
+        Identifier funcName = dotExpr->getName().getBaseIdentifier();
+        if (funcName != ctx.Id_appendInterpolation) { continue; }
+        
+        llvm::errs() << "Got an appendInterpolation call\n";
+
+        auto *argExpr = dyn_cast<ParenExpr>(callExpr->getArg());
+        assert(argExpr != nullptr && "Couldn't grab the arg?");
+
+        auto *arg = dyn_cast<DeclRefExpr>(argExpr->getSubExpr());
+        assert(arg != nullptr && 
+          "Couldn't extract the arg expr, "
+          "possibly if the variable does not exist?");
+
+        // Overall type of the interpolated expression
+        // e.g. Regex<T> 
+        Type interpolationType = arg->getDeclRef().getDecl()->getInterfaceType();
+        // auto interpolatedCaptureType = 
+        //   DependentMemberType::get(interpolationType, captureTypeDecl);        
+        // llvm::errs() << "Dependent member type:\n";
+        // interpolatedCaptureType->dump();
+
+        auto conformance = 
+          TypeChecker::conformsToProtocol(interpolationType, patternProto, CS.DC->getParentModule());
+        assert(conformance && "Couldn't find conformance to ExpressibleByPattern?");
+
+        // Extract out interpolatedCaptureType = Regex<T>.Captured
+        auto interpolatedCaptureType =
+          conformance.getAssociatedType(interpolationType, captureTypeDecl->getDeclaredInterfaceType());
+
+        interpolationTypes.push_back(interpolatedCaptureType);
+      }
+
+      auto *captureTypeRepr = expr
+        ->getCaptureTypeStructure()
+        ->toTypeRepr(ctx, expr->getSourceRange(), interpolationTypes);
+      
+      Type captureType =
+        resolveTypeReferenceInExpression(captureTypeRepr, 
                                          TypeResolverContext::InExpression, 
                                          locator);
       assert(captureType && "Error in resolving capture type: String/Array/Optional not defined?");
       
-      llvm::errs() << "Resolved capture type:\n";
-      captureType->dump();
+      llvm::errs() << "Resolved ty:\n";
+      captureType.dump();
+
+      expr->deleteCaptureTypeStructure();
 
       // tv.Captured ~ captureType
-      CS.addConstraint(ConstraintKind::Equal, captureTV, captureType, locator);
+      CS.addConstraint(ConstraintKind::Conversion, captureTV, captureType, locator);
 
       return tv;
     }
