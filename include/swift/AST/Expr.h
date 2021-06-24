@@ -921,6 +921,33 @@ public:
 
 class PatternLiteralExpr : public LiteralExpr {
 public:
+  enum class RegexTokenKind {
+    /// Regular text
+    Literal,
+    /// Capture group start (
+    LParen,
+    /// Close paren )
+    RParen,
+    /// Alternation |
+    Pipe,
+    /// Many *
+    Star,
+    /// Some +
+    Plus,
+    /// Optional ?
+    Question,
+    /// Interpolation start \(
+    LEscapeParen,
+
+    /// Final token 
+    Eof,
+  };
+
+  struct RegexToken {
+    RegexTokenKind kind;
+    StringRef source;
+  };
+
   enum class CaptureKind {
     Substring,
     Tuple,
@@ -930,12 +957,12 @@ public:
 
     Invalid
   };
-
+ 
   class CaptureStructure {
     CaptureKind Kind;
     std::unique_ptr<CaptureStructure> Inner;
     std::vector<CaptureStructure> Elements;
-    size_t Index;
+    size_t Index = static_cast<size_t>(-1);
 
     CaptureStructure(CaptureKind kind) : Kind(kind) { }
 
@@ -991,9 +1018,13 @@ public:
       return CaptureStructure(CaptureKind::Interpolation, index);
     }
 
+    bool operator==(const CaptureStructure& other) const;
+
     TypeRepr *toTypeRepr(ASTContext &ctx, 
                          SourceRange range,
-                         const std::vector<Type> interpolationTypes) const;
+                         ArrayRef<Type> interpolationTypes) const;
+
+    void dump(llvm::raw_ostream& out = llvm::errs()) const;
   };
 
   PatternLiteralExpr(SourceLoc Loc, 
@@ -1009,6 +1040,9 @@ public:
       CaptureTypeStructure(new CaptureStructure(std::move(Structure)))
   {
   }
+
+  static RegexToken peekToken(StringRef input);
+  static void consumeToken(StringRef& input, const RegexToken& tok);
 
   // These two are the same as in InterpolatedStringLiteral
 

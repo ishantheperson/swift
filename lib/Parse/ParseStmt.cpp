@@ -49,6 +49,7 @@ bool Parser::isStartOfStmt() {
   case tok::kw_guard:
   case tok::kw_while:
   case tok::kw_do:
+  case tok::kw_chain:
   case tok::kw_repeat:
   case tok::kw_for:
   case tok::kw_break:

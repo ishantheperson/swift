@@ -2412,13 +2412,80 @@ void KeyPathExpr::Component::setSubscriptIndexHashableConformances(
   }
 }
 
+bool PatternLiteralExpr::CaptureStructure::operator==(const CaptureStructure &other) const {
+  return Kind == other.Kind 
+      && Inner == other.Inner 
+      && Elements == other.Elements 
+      && Index == other.Index;
+}
+
+PatternLiteralExpr::RegexToken PatternLiteralExpr::peekToken(StringRef input)  {
+  if (input.empty()) { return { RegexTokenKind::Eof, input }; }
+  switch (input[0]) {
+  case '(':
+    return { RegexTokenKind::LParen, input.substr(0, 1) };
+  case ')':
+    return { RegexTokenKind::RParen, input.substr(0, 1) };
+  case '|':
+    return { RegexTokenKind::Pipe, input.substr(0, 1) };
+  case '*':
+    return { RegexTokenKind::Star, input.substr(0, 1) };
+  case '+':
+    return { RegexTokenKind::Plus, input.substr(0, 1) };
+  case '?':
+    return { RegexTokenKind::Question, input.substr(0, 1) };
+  case '\\':
+    if (input.size() < 2) {
+      llvm::errs() << "Escape sequence in regex does not escape anything";
+      exit(0);
+    }
+    // One character peek ahead
+    switch (input[1]) {
+      case '(':
+        return { RegexTokenKind::LEscapeParen, input.substr(0, 2) };
+
+      default:
+        return { RegexTokenKind::Literal, input.substr(0, 2) };
+    }
+
+  default:
+    // Peek ahead to end of string segment
+    size_t i;
+    for (i = 1; i < input.size(); ++i) {
+      bool isMetachar = false;
+      switch (input[i]) {
+      case '(':
+      case ')':
+      case '|':
+      case '*':
+      case '+':
+      case '?':
+      case '\\':
+        isMetachar = true;
+        break;
+      }
+
+      if (isMetachar) break;
+    }
+
+    return { RegexTokenKind::Literal, input.substr(0, i) };
+  }
+}
+
+void PatternLiteralExpr::consumeToken(StringRef& input, const RegexToken& tok) {
+  assert(tok.kind != RegexTokenKind::Eof && "Cannot advance past the end of input");
+
+  input = input.substr(tok.source.size());
+}
+
 TypeRepr *PatternLiteralExpr::CaptureStructure::toTypeRepr(
   ASTContext &ctx,
   SourceRange range,
-  const std::vector<Type> interpolationTypes) const 
+  ArrayRef<Type> interpolationTypes) const 
 {
   DeclNameRef stringDecl(DeclName(ctx.Id_Substring));
-  switch (getKind()) {
+  
+  switch (Kind) {
   case CaptureKind::Substring:
     return new (ctx) SimpleIdentTypeRepr(DeclNameLoc(range.Start), stringDecl);
 
@@ -2439,12 +2506,17 @@ TypeRepr *PatternLiteralExpr::CaptureStructure::toTypeRepr(
   
   case CaptureKind::Optional:
     return new (ctx) OptionalTypeRepr(getInner()->toTypeRepr(ctx, range, interpolationTypes), range.Start);
+  
   case CaptureKind::Interpolation:
-    return new (ctx) FixedTypeRepr(interpolationTypes.at(getIndex()), SourceLoc());
+    return new (ctx) FixedTypeRepr(interpolationTypes[getIndex()], SourceLoc());
 
   case CaptureKind::Invalid:
     llvm_unreachable("Calling toTypeRepr on an invalid CaptureStructure");
   }
+}
+
+void PatternLiteralExpr::CaptureStructure::dump(llvm::raw_ostream& out) const {
+  out << "PatternLiteralExpr::CaptureStructure\n";
 }
 
 void InterpolatedStringLiteralExpr::forEachSegment(ASTContext &Ctx, 

@@ -1215,15 +1215,11 @@ namespace {
         auto *arg = dyn_cast<DeclRefExpr>(argExpr->getSubExpr());
         assert(arg != nullptr && 
           "Couldn't extract the arg expr, "
-          "possibly if the variable does not exist?");
+          "possible if the variable does not exist?");
 
         // Overall type of the interpolated expression
         // e.g. Regex<T> 
         Type interpolationType = arg->getDeclRef().getDecl()->getInterfaceType();
-        // auto interpolatedCaptureType = 
-        //   DependentMemberType::get(interpolationType, captureTypeDecl);        
-        // llvm::errs() << "Dependent member type:\n";
-        // interpolatedCaptureType->dump();
 
         auto conformance = 
           TypeChecker::conformsToProtocol(interpolationType, patternProto, CS.DC->getParentModule());
@@ -1246,9 +1242,6 @@ namespace {
                                          locator);
       assert(captureType && "Error in resolving capture type: String/Array/Optional not defined?");
       
-      llvm::errs() << "Resolved ty:\n";
-      captureType.dump();
-
       expr->deleteCaptureTypeStructure();
 
       // tv.Captured ~ captureType

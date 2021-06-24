@@ -2212,11 +2212,7 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
                                     appendInterpolation,
                                     /*NameLoc=*/DeclNameLoc(),
                                     /*Implicit=*/true);
-
-  DeclNameRef stringDecl(DeclName(Context.Id_Substring));
-  TypeRepr *stringType =
-    new (Context) SimpleIdentTypeRepr(DeclNameLoc(Loc), stringDecl);
-
+  
   // Capture groups
   using CaptureStructure = PatternLiteralExpr::CaptureStructure;
   std::vector<CaptureStructure> captureGroupTypes;
@@ -2259,13 +2255,11 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
         assert(!name.empty() && "\\( .. ) must contain an identifier");
         // TODO: make sure name is a valid identifier
         // Either way this should be moved to the parser
-        llvm::errs() << "Got '" << name << "'\n";
 
         auto ident = Context.getIdentifier(name);
-        // auto nameRef = UnresolvedDeclRefExpr::createImplicit(Context, DeclName(ident));
         auto nameRef = new (Context) UnresolvedDeclRefExpr(
           DeclNameRef(ident), 
-          DeclRefKind::Ordinary, 
+          DeclRefKind::Ordinary,
           DeclNameLoc(Loc));
 
         auto callAppendInterpolation = 
