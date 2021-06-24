@@ -2509,8 +2509,7 @@ public:
     for (auto capture : E->getCaptureList()) {
       OS << '\n';
       Indent += 2;
-      printRec(capture.Var);
-      printRec(capture.Init);
+      printRec(capture.PBD);
       Indent -= 2;
     }
     printRec(E->getClosureBody());
@@ -3124,6 +3123,12 @@ public:
 
   void visitOwnedTypeRepr(OwnedTypeRepr *T) {
     printCommon("type_owned") << '\n';
+    printRec(T->getBase());
+    PrintWithColorRAII(OS, ParenthesisColor) << ')';
+  }
+
+  void visitIsolatedTypeRepr(IsolatedTypeRepr *T) {
+    printCommon("isolated") << '\n';
     printRec(T->getBase());
     PrintWithColorRAII(OS, ParenthesisColor) << ')';
   }

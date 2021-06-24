@@ -1004,7 +1004,8 @@ public:
 
   /// Parse the optional modifiers before a declaration.
   bool parseDeclModifierList(DeclAttributes &Attributes, SourceLoc &StaticLoc,
-                             StaticSpellingKind &StaticSpelling);
+                             StaticSpellingKind &StaticSpelling,
+                             bool isFromClangAttribute = false);
 
   /// Parse an availability attribute of the form
   /// @available(*, introduced: 1.0, deprecated: 3.1).
@@ -1100,16 +1101,21 @@ public:
 
   ParserStatus parseTypeAttributeList(ParamDecl::Specifier &Specifier,
                                       SourceLoc &SpecifierLoc,
+                                      SourceLoc &IsolatedLoc,
                                       TypeAttributes &Attributes) {
     if (Tok.isAny(tok::at_sign, tok::kw_inout) ||
         (Tok.is(tok::identifier) &&
          (Tok.getRawText().equals("__shared") ||
-          Tok.getRawText().equals("__owned"))))
-      return parseTypeAttributeListPresent(Specifier, SpecifierLoc, Attributes);
+          Tok.getRawText().equals("__owned") ||
+          Tok.isContextualKeyword("isolated"))))
+      return parseTypeAttributeListPresent(
+          Specifier, SpecifierLoc, IsolatedLoc, Attributes);
     return makeParserSuccess();
   }
+
   ParserStatus parseTypeAttributeListPresent(ParamDecl::Specifier &Specifier,
                                              SourceLoc &SpecifierLoc,
+                                             SourceLoc &IsolatedLoc,
                                              TypeAttributes &Attributes);
 
   bool parseConventionAttributeInternal(bool justChecking,
@@ -1212,15 +1218,25 @@ public:
 
   //===--------------------------------------------------------------------===//
   // Type Parsing
-  
+
+  enum class ParseTypeReason {
+    /// Any type parsing context.
+    Unspecified,
+
+    /// Whether the type is for a closure attribute.
+    CustomAttribute,
+  };
+
   ParserResult<TypeRepr> parseType();
-  ParserResult<TypeRepr> parseType(Diag<> MessageID,
-                                   bool IsSILFuncDecl = false);
+  ParserResult<TypeRepr> parseType(
+      Diag<> MessageID,
+      ParseTypeReason reason = ParseTypeReason::Unspecified);
 
   ParserResult<TypeRepr>
-    parseTypeSimpleOrComposition(Diag<> MessageID);
+    parseTypeSimpleOrComposition(Diag<> MessageID, ParseTypeReason reason);
 
-  ParserResult<TypeRepr> parseTypeSimple(Diag<> MessageID);
+  ParserResult<TypeRepr> parseTypeSimple(
+      Diag<> MessageID, ParseTypeReason reason);
 
   /// Parse layout constraint.
   LayoutConstraint parseLayoutConstraint(Identifier LayoutConstraintID);
@@ -1248,7 +1264,7 @@ public:
                                          const TypeAttributes &attrs);
   
   ParserResult<TypeRepr> parseTypeTupleBody();
-  ParserResult<TypeRepr> parseTypeArray(TypeRepr *Base);
+  ParserResult<TypeRepr> parseTypeArray(ParserResult<TypeRepr> Base);
 
   /// Parse a collection type.
   ///   type-simple:
@@ -1256,9 +1272,10 @@ public:
   ///     '[' type ':' type ']'
   ParserResult<TypeRepr> parseTypeCollection();
 
-  ParserResult<TypeRepr> parseTypeOptional(TypeRepr *Base);
+  ParserResult<TypeRepr> parseTypeOptional(ParserResult<TypeRepr> Base);
 
-  ParserResult<TypeRepr> parseTypeImplicitlyUnwrappedOptional(TypeRepr *Base);
+  ParserResult<TypeRepr>
+  parseTypeImplicitlyUnwrappedOptional(ParserResult<TypeRepr> Base);
 
   bool isOptionalToken(const Token &T) const;
   SourceLoc consumeOptionalToken();
@@ -1268,7 +1285,8 @@ public:
 
   TypeRepr *applyAttributeToType(TypeRepr *Ty, const TypeAttributes &Attr,
                                  ParamDecl::Specifier Specifier,
-                                 SourceLoc SpecifierLoc);
+                                 SourceLoc SpecifierLoc,
+                                 SourceLoc IsolatedLoc);
 
   //===--------------------------------------------------------------------===//
   // Pattern Parsing
@@ -1327,6 +1345,9 @@ public:
     /// The second name, the presence of which is indicated by \c SecondNameLoc.
     Identifier SecondName;
 
+    /// The location of the 'isolated' keyword, if present.
+    SourceLoc IsolatedLoc;
+
     /// The type following the ':'.
     TypeRepr *Type = nullptr;
 
@@ -1360,6 +1381,9 @@ public:
     /// An enum element.
     EnumElement,
   };
+
+  /// Whether we are at the start of a parameter name when parsing a parameter.
+  bool startsParameterName(bool isClosure);
 
   /// Parse a parameter-clause.
   ///

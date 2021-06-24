@@ -98,7 +98,7 @@ extension Task {
   public var result: Result<Success, Failure> {
     get async {
       do {
-        return .success(try await get())
+        return .success(try await value)
       } catch {
         return .failure(error as! Failure) // as!-safe, guaranteed to be Failure
       }
@@ -257,7 +257,7 @@ extension Task where Success == Never, Failure == Never {
       }
 
       // Otherwise, query the system.
-      return TaskPriority(rawValue: UInt8(_getCurrentThreadPriority()))
+      return TaskPriority(rawValue: UInt8(0))
     }
   }
 }
@@ -266,10 +266,6 @@ extension Task where Success == Never, Failure == Never {
 extension TaskPriority {
   /// Downgrade user-interactive to user-initiated.
   var _downgradeUserInteractive: TaskPriority {
-    if self == .userInteractive {
-      return .userInitiated
-    }
-
     return self
   }
 }
@@ -415,7 +411,7 @@ extension Task where Failure == Never {
     flags.isContinuingAsyncTask = true
 
     // Create the asynchronous task future.
-    let (task, _) = Builtin.createAsyncTaskFuture(Int(flags.bits), operation)
+    let (task, _) = Builtin.createAsyncTaskFuture(Int(flags.bits), /*options*/nil, operation)
 
     // Copy all task locals to the newly created task.
     // We must copy them rather than point to the current task since the new task
@@ -460,7 +456,7 @@ extension Task where Failure == Error {
     flags.isContinuingAsyncTask = true
 
     // Create the asynchronous task future.
-    let (task, _) = Builtin.createAsyncTaskFuture(Int(flags.bits), operation)
+    let (task, _) = Builtin.createAsyncTaskFuture(Int(flags.bits), /*options*/nil, operation)
 
     // Copy all task locals to the newly created task.
     // We must copy them rather than point to the current task since the new task
@@ -519,11 +515,11 @@ extension Task where Failure == Never {
     // Set up the job flags for a new task.
     var flags = JobFlags()
     flags.kind = .task
-    flags.priority = priority ?? .default
+    flags.priority = priority ?? .unspecified
     flags.isFuture = true
 
     // Create the asynchronous task future.
-    let (task, _) = Builtin.createAsyncTaskFuture(Int(flags.bits), operation)
+    let (task, _) = Builtin.createAsyncTaskFuture(Int(flags.bits), /*options*/nil, operation)
 
     // Enqueue the resulting job.
     _enqueueJobGlobal(Builtin.convertTaskToJob(task))
@@ -574,11 +570,11 @@ extension Task where Failure == Error {
     // Set up the job flags for a new task.
     var flags = JobFlags()
     flags.kind = .task
-    flags.priority = priority ?? .default
+    flags.priority = priority ?? .unspecified
     flags.isFuture = true
 
     // Create the asynchronous task future.
-    let (task, _) = Builtin.createAsyncTaskFuture(Int(flags.bits), operation)
+    let (task, _) = Builtin.createAsyncTaskFuture(Int(flags.bits), /*options*/nil, operation)
 
     // Enqueue the resulting job.
     _enqueueJobGlobal(Builtin.convertTaskToJob(task))
@@ -694,7 +690,7 @@ public struct UnsafeCurrentTask {
   /// - SeeAlso: `TaskPriority`
   /// - SeeAlso: `Task.currentPriority`
   public var priority: TaskPriority {
-    getJobFlags(_task).priority ?? .default
+    getJobFlags(_task).priority ?? .unspecified
   }
 }
 
@@ -739,30 +735,17 @@ public func _asyncMainDrainQueue() -> Never
 
 @available(SwiftStdlib 5.5, *)
 public func _runAsyncMain(_ asyncFun: @escaping () async throws -> ()) {
-#if os(Windows)
   Task.detached {
     do {
+#if !os(Windows)
+      Builtin.hopToActor(MainActor.shared)
+#endif
       try await asyncFun()
       exit(0)
     } catch {
       _errorInMain(error)
     }
   }
-#else
-  @MainActor @Sendable
-  func _doMain(_ asyncFun: @escaping () async throws -> ()) async {
-    do {
-      try await asyncFun()
-    } catch {
-      _errorInMain(error)
-    }
-  }
-
-  Task.detached {
-    await _doMain(asyncFun)
-    exit(0)
-  }
-#endif
   _asyncMainDrainQueue()
 }
 
@@ -814,12 +797,8 @@ func _getCurrentThreadPriority() -> Int
 @available(SwiftStdlib 5.5, *)
 @_alwaysEmitIntoClient
 @usableFromInline
-internal func _runTaskForBridgedAsyncMethod(_ body: @escaping () async -> Void) {
-#if compiler(>=5.5) && $Sendable && $InheritActorContext && $ImplicitSelfCapture
-  Task { await body() }
-#else
-  Task.runDetached { await body() }
-#endif
+internal func _runTaskForBridgedAsyncMethod(@_inheritActorContext _ body: __owned @Sendable @escaping () async -> Void) {
+  Task(operation: body)
 }
 
 #endif

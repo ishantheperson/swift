@@ -45,7 +45,7 @@ enum {
 
   /// The number of words (in addition to the heap-object header)
   /// in a default actor.
-  NumWords_DefaultActor = 10,
+  NumWords_DefaultActor = 12,
 
   /// The number of words in a task.
   NumWords_AsyncTask = 16,
@@ -950,7 +950,8 @@ class TargetParameterTypeFlags {
     ValueOwnershipMask    = 0x7F,
     VariadicMask          = 0x80,
     AutoClosureMask       = 0x100,
-    NoDerivativeMask      = 0x200
+    NoDerivativeMask      = 0x200,
+    IsolatedMask          = 0x400,
   };
   int_type Data;
 
@@ -983,10 +984,17 @@ public:
         (Data & ~NoDerivativeMask) | (isNoDerivative ? NoDerivativeMask : 0));
   }
 
+  constexpr TargetParameterTypeFlags<int_type>
+  withIsolated(bool isIsolated) const {
+    return TargetParameterTypeFlags<int_type>(
+        (Data & ~IsolatedMask) | (isIsolated ? IsolatedMask : 0));
+  }
+
   bool isNone() const { return Data == 0; }
   bool isVariadic() const { return Data & VariadicMask; }
   bool isAutoClosure() const { return Data & AutoClosureMask; }
   bool isNoDerivative() const { return Data & NoDerivativeMask; }
+  bool isIsolated() const { return Data & IsolatedMask; }
 
   ValueOwnership getValueOwnership() const {
     return (ValueOwnership)(Data & ValueOwnershipMask);
@@ -2028,10 +2036,11 @@ public:
 
     // Kind-specific flags.
 
-    Task_IsChildTask      = 24,
-    Task_IsFuture         = 25,
-    Task_IsGroupChildTask = 26,
-    Task_IsContinuingAsyncTask      = 27,
+    Task_IsChildTask           = 24,
+    Task_IsFuture              = 25,
+    Task_IsGroupChildTask      = 26,
+    Task_IsContinuingAsyncTask = 27,
+    Task_IsAsyncLetTask        = 28,
   };
 
   explicit JobFlags(uint32_t bits) : FlagSet(bits) {}
@@ -2064,6 +2073,9 @@ public:
   FLAGSET_DEFINE_FLAG_ACCESSORS(Task_IsContinuingAsyncTask,
                                 task_isContinuingAsyncTask,
                                 task_setIsContinuingAsyncTask)
+  FLAGSET_DEFINE_FLAG_ACCESSORS(Task_IsAsyncLetTask,
+                                task_isAsyncLetTask,
+                                task_setIsAsyncLetTask)
 };
 
 /// Kinds of task status record.
@@ -2093,6 +2105,14 @@ enum class TaskStatusRecordKind : uint8_t {
   Private_RecordLock = 192
 };
 
+/// Kinds of option records that can be passed to creating asynchronous tasks.
+enum class TaskOptionRecordKind : uint8_t {
+  /// Request a task to be kicked off, or resumed, on a specific executor.
+  Executor  = 0,
+  /// Request a child task to be part of a specific task group.
+  TaskGroup = 1,
+};
+
 /// Flags for cancellation records.
 class TaskStatusRecordFlags : public FlagSet<size_t> {
 public:
@@ -2108,6 +2128,24 @@ public:
   }
 
   FLAGSET_DEFINE_FIELD_ACCESSORS(Kind, Kind_width, TaskStatusRecordKind,
+                                 getKind, setKind)
+};
+
+/// Flags for task option records.
+class TaskOptionRecordFlags : public FlagSet<size_t> {
+public:
+  enum {
+    Kind           = 0,
+    Kind_width     = 8,
+  };
+
+  explicit TaskOptionRecordFlags(size_t bits) : FlagSet(bits) {}
+  constexpr TaskOptionRecordFlags() {}
+  TaskOptionRecordFlags(TaskOptionRecordKind kind) {
+    setKind(kind);
+  }
+
+  FLAGSET_DEFINE_FIELD_ACCESSORS(Kind, Kind_width, TaskOptionRecordKind,
                                  getKind, setKind)
 };
 

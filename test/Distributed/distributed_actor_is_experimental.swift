@@ -1,12 +1,13 @@
 // RUN: %target-typecheck-verify-swift -enable-experimental-concurrency
 // ^^^^ notice the, on purpose, missing '-enable-experimental-distributed'
 // REQUIRES: concurrency
+// REQUIRES: distributed
 
 actor SomeActor {}
 
 @available(SwiftStdlib 5.5, *)
 distributed actor DA {} // expected-error{{'_Distributed' module not imported, required for 'distributed actor'}}
-// expected-error@-1{{class 'DA' has no initializers}}
+// expected-error@-1{{actor 'DA' has no initializers}}
 
 @available(SwiftStdlib 5.5, *)
 distributed actor class DAC {} // expected-error{{distributed' can only be applied to 'actor' definitions, and distributed actor-isolated async functions}}
@@ -24,7 +25,7 @@ actor A {
 
 @available(SwiftStdlib 5.5, *)
 distributed actor DA2 { // expected-error{{'_Distributed' module not imported, required for 'distributed actor'}}
-  // expected-error@-1{{class 'DA2' has no initializers}}
+  // expected-error@-1{{actor 'DA2' has no initializers}}
   func normal() async {}
   distributed func dist() {}
   distributed func distAsync() async {}

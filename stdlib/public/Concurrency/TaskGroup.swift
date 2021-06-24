@@ -68,9 +68,9 @@ public func withTaskGroup<ChildTaskResult, GroupResult>(
   returning returnType: GroupResult.Type = GroupResult.self,
   body: (inout TaskGroup<ChildTaskResult>) async -> GroupResult
 ) async -> GroupResult {
-  #if compiler(>=5.5) && $BuiltinTaskGroup
+  #if compiler(>=5.5) && $BuiltinTaskGroupWithArgument
 
-  let _group = Builtin.createTaskGroup()
+  let _group = Builtin.createTaskGroup(ChildTaskResult.self)
   var group = TaskGroup<ChildTaskResult>(group: _group)
 
   // Run the withTaskGroup body.
@@ -147,9 +147,9 @@ public func withThrowingTaskGroup<ChildTaskResult, GroupResult>(
   returning returnType: GroupResult.Type = GroupResult.self,
   body: (inout ThrowingTaskGroup<ChildTaskResult, Error>) async throws -> GroupResult
 ) async rethrows -> GroupResult {
-  #if compiler(>=5.5) && $BuiltinTaskGroup
+  #if compiler(>=5.5) && $BuiltinTaskGroupWithArgument
 
-  let _group = Builtin.createTaskGroup()
+  let _group = Builtin.createTaskGroup(ChildTaskResult.self)
   var group = ThrowingTaskGroup<ChildTaskResult, Error>(group: _group)
 
   do {
@@ -223,7 +223,7 @@ public struct TaskGroup<ChildTaskResult> {
 
     // Create the asynchronous task future.
     let (childTask, _) = Builtin.createAsyncTaskGroupFuture(
-      Int(flags.bits), _group, operation)
+      Int(flags.bits), _group, /*options*/nil, operation)
 
     // Attach it to the group's task record in the current task.
     _taskGroupAttachChild(group: _group, child: childTask)
@@ -268,7 +268,7 @@ public struct TaskGroup<ChildTaskResult> {
 
     // Create the asynchronous task future.
     let (childTask, _) = Builtin.createAsyncTaskGroupFuture(
-      Int(flags.bits), _group, operation)
+      Int(flags.bits), _group, /*options*/nil, operation)
 
     // Attach it to the group's task record in the current task.
     _taskGroupAttachChild(group: _group, child: childTask)
@@ -355,12 +355,12 @@ public struct TaskGroup<ChildTaskResult> {
     _taskGroupIsEmpty(_group)
   }
 
-  /// Cancel all the remaining tasks in the group.
+  /// Cancel all the remaining, and future, tasks in the group.
   ///
-  /// A cancelled group will not will NOT accept new tasks being added into it.
-  ///
-  /// Any results, including errors thrown by tasks affected by this
-  /// cancellation, are silently discarded.
+  /// A cancelled group will not will create new tasks when the `asyncUnlessCancelled`,
+  /// function is used. It will, however, continue to create tasks when the plain `async`
+  /// function is used. Such tasks will be created yet immediately cancelled, allowing
+  /// the tasks to perform some short-cut implementation, if they are responsive to cancellation.
   ///
   /// This function may be called even from within child (or any other) tasks,
   /// and will reliably cause the group to become cancelled.
@@ -466,7 +466,7 @@ public struct ThrowingTaskGroup<ChildTaskResult, Failure: Error> {
 
     // Create the asynchronous task future.
     let (childTask, _) = Builtin.createAsyncTaskGroupFuture(
-      Int(flags.bits), _group, operation)
+      Int(flags.bits), _group, /*options*/nil, operation)
 
     // Attach it to the group's task record in the current task.
     _taskGroupAttachChild(group: _group, child: childTask)
@@ -511,7 +511,7 @@ public struct ThrowingTaskGroup<ChildTaskResult, Failure: Error> {
 
     // Create the asynchronous task future.
     let (childTask, _) = Builtin.createAsyncTaskGroupFuture(
-      Int(flags.bits), _group, operation)
+      Int(flags.bits), _group, /*options*/nil, operation)
 
     // Attach it to the group's task record in the current task.
     _taskGroupAttachChild(group: _group, child: childTask)

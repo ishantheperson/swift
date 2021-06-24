@@ -1569,10 +1569,8 @@ ManagedValue emitCFunctionPointer(SILGenFunction &SGF,
     // Ensure that weak captures are in a separate scope.
     DebugScope scope(SGF, CleanupLocation(captureList));
     // CaptureListExprs evaluate their bound variables.
-    for (auto capture : captureList->getCaptureList()) {
-      SGF.visit(capture.Var);
-      SGF.visit(capture.Init);
-    }
+    for (auto capture : captureList->getCaptureList())
+      SGF.visit(capture.PBD);
 
     // Emit the closure body.
     auto *closure = captureList->getClosureBody();
@@ -2419,10 +2417,8 @@ RValue RValueEmitter::visitCaptureListExpr(CaptureListExpr *E, SGFContext C) {
   // Ensure that weak captures are in a separate scope.
   DebugScope scope(SGF, CleanupLocation(E));
   // CaptureListExprs evaluate their bound variables.
-  for (auto capture : E->getCaptureList()) {
-    SGF.visit(capture.Var);
-    SGF.visit(capture.Init);
-  }
+  for (auto capture : E->getCaptureList())
+    SGF.visit(capture.PBD);
 
   // Then they evaluate to their body.
   return visit(E->getClosureBody(), C);

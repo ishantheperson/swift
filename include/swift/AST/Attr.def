@@ -574,7 +574,11 @@ CONTEXTUAL_SIMPLE_DECL_ATTR(actor, Actor,
   APIBreakingToAdd | APIBreakingToRemove,
   102)
 
-// Unused attribute 103
+CONTEXTUAL_SIMPLE_DECL_ATTR(isolated, Isolated,
+  DeclModifier | OnParam |
+  ABIBreakingToAdd | ABIBreakingToRemove |
+  APIBreakingToAdd | APIBreakingToRemove,
+  103)
 
 SIMPLE_DECL_ATTR(globalActor, GlobalActor,
   OnClass | OnStruct | OnEnum | ConcurrencyOnly |
@@ -668,6 +672,10 @@ SIMPLE_DECL_ATTR(_distributedActorIndependent, DistributedActorIndependent,
   APIBreakingToAdd | APIBreakingToRemove,
   119)
 
+SIMPLE_DECL_ATTR(_assemblyVision, EmitAssemblyVisionRemarks,
+  OnFunc | UserInaccessible | NotSerialized |
+  ABIStableToAdd | ABIStableToRemove | APIStableToAdd | APIStableToRemove,
+  120)
 
 #undef TYPE_ATTR
 #undef DECL_ATTR_ALIAS

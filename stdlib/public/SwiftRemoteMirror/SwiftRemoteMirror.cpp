@@ -282,6 +282,13 @@ swift_reflection_metadataForObject(SwiftReflectionContextRef ContextRef,
   return *MetadataAddress;
 }
 
+swift_reflection_ptr_t
+swift_reflection_metadataNominalTypeDescriptor(SwiftReflectionContextRef ContextRef,
+                                               swift_reflection_ptr_t MetadataAddress) {
+  auto Context = ContextRef->nativeContext;
+  return Context->nominalTypeDescriptorFromMetadata(MetadataAddress);
+}
+
 swift_typeref_t
 swift_reflection_typeRefForInstance(SwiftReflectionContextRef ContextRef,
                                     uintptr_t Object) {
@@ -571,6 +578,23 @@ int swift_reflection_projectExistential(SwiftReflectionContextRef ContextRef,
   return Success;
 }
 
+int swift_reflection_projectExistentialAndUnwrapClass(SwiftReflectionContextRef ContextRef,
+                                        swift_addr_t ExistentialAddress,
+                                        swift_typeref_t ExistentialTypeRef,
+                                        swift_typeref_t *InstanceTypeRef,
+                                        swift_addr_t *StartOfInstanceData) {
+  auto Context = ContextRef->nativeContext;
+  auto ExistentialTR = reinterpret_cast<const TypeRef *>(ExistentialTypeRef);
+  auto RemoteExistentialAddress = RemoteAddress(ExistentialAddress);
+  auto Pair = Context->projectExistentialAndUnwrapClass(
+      RemoteExistentialAddress, *ExistentialTR);
+  if (!Pair.hasValue())
+    return false;
+  *InstanceTypeRef = reinterpret_cast<swift_typeref_t>(std::get<const TypeRef *>(*Pair));
+  *StartOfInstanceData = std::get<RemoteAddress>(*Pair).getAddressData();
+
+  return true;
+}
 int swift_reflection_projectEnumValue(SwiftReflectionContextRef ContextRef,
                                       swift_addr_t EnumAddress,
                                       swift_typeref_t EnumTypeRef,

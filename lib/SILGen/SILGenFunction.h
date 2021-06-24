@@ -840,6 +840,10 @@ public:
                             Optional<ActorIsolation> actorIso,
                             Optional<ManagedValue> actorSelf);
 
+  /// Generate a hop directly to a dynamic actor instance. This can only be done
+  /// inside an async actor-independent function. No hop-back is expected.
+  void emitHopToActorValue(SILLocation loc, ManagedValue actor);
+
   /// A version of `emitHopToTargetActor` that is specialized to the needs
   /// of various types of ConstructorDecls, like class or value initializers,
   /// because their prolog emission is not the same as for regular functions.
@@ -1370,8 +1374,9 @@ public:
                        ArgumentSource &&value,
                        bool isOnSelfParameter);
 
-  ManagedValue emitAsyncLetStart(
-      SILLocation loc, Type functionType, ManagedValue taskFunction);
+  ManagedValue emitAsyncLetStart(SILLocation loc,
+                                 SILValue taskOptions,
+                                 Type functionType, ManagedValue taskFunction);
 
   ManagedValue emitAsyncLetGet(SILLocation loc, SILValue asyncLet);
 
@@ -2067,9 +2072,6 @@ public:
 
   /// Destroy and deallocate an initialized local variable.
   void destroyLocalVariable(SILLocation L, VarDecl *D);
-  
-  /// Deallocate an uninitialized local variable.
-  void deallocateUninitializedLocalVariable(SILLocation L, VarDecl *D);
 
   /// Enter a cleanup to deallocate a stack variable.
   CleanupHandle enterDeallocStackCleanup(SILValue address);

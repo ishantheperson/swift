@@ -457,6 +457,8 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
       = A->getOption().matches(OPT_enable_conformance_availability_errors);
   }
 
+  Opts.WarnOnPotentiallyUnavailableEnumCase |=
+      Args.hasArg(OPT_warn_on_potentially_unavailable_enum_case);
   if (auto A = Args.getLastArg(OPT_enable_access_control,
                                OPT_disable_access_control)) {
     Opts.EnableAccessControl
@@ -1756,6 +1758,10 @@ static bool ParseIRGenArgs(IRGenOptions &Opts, ArgList &Args,
 
   for (const auto &Lib : Args.getAllArgValues(options::OPT_autolink_library))
     Opts.LinkLibraries.push_back(LinkLibrary(Lib, LibraryKind::Library));
+
+  for (const auto &Lib : Args.getAllArgValues(options::OPT_public_autolink_library)) {
+    Opts.PublicLinkLibraries.push_back(Lib);
+  }
 
   if (const Arg *A = Args.getLastArg(OPT_type_info_dump_filter_EQ)) {
     StringRef mode(A->getValue());

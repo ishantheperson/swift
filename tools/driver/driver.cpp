@@ -17,6 +17,7 @@
 #include "swift/AST/DiagnosticEngine.h"
 #include "swift/AST/DiagnosticsDriver.h"
 #include "swift/Basic/LLVMInitialize.h"
+#include "swift/Basic/InitializeLibSwift.h"
 #include "swift/Basic/PrettyStackTrace.h"
 #include "swift/Basic/Program.h"
 #include "swift/Basic/TaskQueue.h"
@@ -183,6 +184,10 @@ static bool appendSwiftDriverName(SmallString<256> &buffer) {
 
 static int run_driver(StringRef ExecName,
                        const ArrayRef<const char *> argv) {
+  // This is done here and not done in FrontendTool.cpp, because
+  // FrontendTool.cpp is linked to tools, which don't use libswift.
+  initializeLibSwift();
+
   // Handle integrated tools.
   if (argv.size() > 1) {
     StringRef FirstArg(argv[1]);
@@ -221,7 +226,7 @@ static int run_driver(StringRef ExecName,
     SmallString<256> NewDriverPath(llvm::sys::path::parent_path(Path));
     if (appendSwiftDriverName(NewDriverPath) &&
         llvm::sys::fs::exists(NewDriverPath)) {
-      SmallVector<const char *, 256> subCommandArgs;
+      std::vector<const char *> subCommandArgs;
       // Rewrite the program argument.
       subCommandArgs.push_back(NewDriverPath.c_str());
       if (ExecName == "swiftc") {

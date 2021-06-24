@@ -380,6 +380,12 @@ ERROR(cannot_convert_argument_value_generic,none,
 ERROR(conflicting_arguments_for_generic_parameter,none,
       "conflicting arguments to generic parameter %0 (%1)",
       (Type, StringRef))
+NOTE(generic_parameter_inferred_from_closure,none,
+     "generic parameter %0 inferred as %1 from closure return expression",
+     (Type, Type))
+NOTE(generic_parameter_inferred_from_result_context,none,
+     "generic parameter %0 inferred as %1 from context",
+     (Type, Type))
 
 // @_nonEphemeral conversion diagnostics
 ERROR(cannot_pass_type_to_non_ephemeral,none,
@@ -1529,7 +1535,7 @@ NOTE(requires_stored_property_inits_here,none,
      "%select{superclass|class}1 %0 requires all stored properties to have "
      "initial values%select{| or use @NSManaged}2", (Type, bool, bool))
 ERROR(class_without_init,none,
-      "class %0 has no initializers", (Type))
+      "%select{class|actor}0 %1 has no initializers", (bool, Type))
 NOTE(note_no_in_class_init_1,none,
      "stored property %0 without initial value prevents synthesized "
      "initializers",
@@ -3654,6 +3660,10 @@ ERROR(not_a_generic_definition,none,
       "cannot specialize a non-generic definition", ())
 ERROR(not_a_generic_type,none,
       "cannot specialize non-generic type %0", (Type))
+ERROR(cannot_specialize_self,none,
+      "cannot specialize 'Self'", ())
+NOTE(specialize_explicit_type_instead,none,
+     "did you mean to explicitly reference %0 instead?", (Type))
 ERROR(type_parameter_count_mismatch,none,
       "generic type %0 specialized with %select{too many|too few}3 type "
       "parameters (got %2, but expected %1)",
@@ -4339,9 +4349,20 @@ ERROR(async_objc_dynamic_self,none,
       "asynchronous method returning 'Self' cannot be '@objc'", ())
 
 ERROR(actor_inheritance,none,
-      "actor types do not support inheritance", ())
+      "%select{actor|distributed actor}0 types do not support inheritance",
+      (bool))
 
-ERROR(unowned_executor_outside_actor,none,
+ERROR(actor_protocol_illegal_inheritance,none,
+      "non-actor type %0 cannot conform to the 'Actor' protocol",
+      (DeclName))
+ERROR(distributed_actor_protocol_illegal_inheritance,none,
+      "non-distributed actor type %0 cannot conform to the 'DistributedActor' protocol",
+      (DeclName))
+
+// FIXME: This diagnostic was temporarily downgraded from an error because
+// it spuriously triggers when building the Foundation module from its textual
+// swiftinterface. (rdar://78932296)
+WARNING(unowned_executor_outside_actor,none,
       "'unownedExecutor' can only be implemented within the main "
       "definition of an actor", ())
 ERROR(override_implicit_unowned_executor,none,
@@ -4349,9 +4370,13 @@ ERROR(override_implicit_unowned_executor,none,
       "explicitly defined", ())
 
 ERROR(actor_isolated_non_self_reference,none,
-        "actor-isolated %0 %1 can only be %select{referenced|mutated|used 'inout'}3 "
-        "%select{from inside the actor|on 'self'}2",
-        (DescriptiveDeclKind, DeclName, bool, unsigned))
+        "actor-isolated %0 %1 can not be "
+        "%select{referenced|mutated|used 'inout'}2 "
+        "%select{on a non-isolated actor instance|"
+        "from a Sendable function|from a Sendable closure|"
+        "from an 'async let' initializer|from global actor %4|"
+        "from the main actor|from a non-isolated context}3",
+        (DescriptiveDeclKind, DeclName, unsigned, unsigned, Type))
 ERROR(distributed_actor_isolated_non_self_reference,none,
       "distributed actor-isolated %0 %1 can only be referenced "
       "inside the distributed actor",
@@ -4359,10 +4384,6 @@ ERROR(distributed_actor_isolated_non_self_reference,none,
 ERROR(distributed_actor_needs_explicit_distributed_import,none,
       "'_Distributed' module not imported, required for 'distributed actor'",
       ())
-ERROR(actor_isolated_self_independent_context,none,
-        "actor-isolated %0 %1 can not be %select{referenced|mutated|used 'inout'}2 from a "
-        "non-isolated context",
-        (DescriptiveDeclKind, DeclName, unsigned))
 ERROR(actor_isolated_inout_state,none,
       "actor-isolated %0 %1 cannot be passed 'inout' to"
       "%select{| implicitly}2 'async' function call",
@@ -4370,10 +4391,6 @@ ERROR(actor_isolated_inout_state,none,
 ERROR(actor_isolated_mutating_func,none,
       "cannot call mutating async function %0 on actor-isolated %1 %2",
       (DeclName, DescriptiveDeclKind, DeclName))
-ERROR(actor_isolated_global_actor_context,none,
-      "actor-isolated %0 %1 can not be %select{referenced|mutated|used 'inout'}3 "
-      "from%select{| synchronous}4 context of global actor %2",
-      (DescriptiveDeclKind, DeclName, Type, unsigned, bool))
 ERROR(global_actor_from_instance_actor_context,none,
       "%0 %1 isolated to global actor %2 can not be %select{referenced|mutated|used 'inout'}4"
       " from actor %3 %select{|in a synchronous context}5",
@@ -4398,15 +4415,6 @@ ERROR(actor_isolated_partial_apply,none,
 ERROR(concurrent_access_local,none,
         "use of local %0 %1 in concurrently-executing code",
         (DescriptiveDeclKind, DeclName))
-ERROR(actor_isolated_from_concurrent_closure,none,
-        "actor-isolated %0 %1 cannot be %select{referenced|mutated|used 'inout'}2 from a concurrent closure",
-        (DescriptiveDeclKind, DeclName, unsigned))
-ERROR(actor_isolated_from_concurrent_function,none,
-        "actor-isolated %0 %1 cannot be %select{referenced|mutated|used 'inout'}2 from a concurrent function",
-        (DescriptiveDeclKind, DeclName, unsigned))
-ERROR(actor_isolated_from_async_let,none,
-        "actor-isolated %0 %1 cannot be %select{referenced|mutated|used 'inout'}2 from 'async let' initializer",
-        (DescriptiveDeclKind, DeclName, unsigned))
 ERROR(actor_isolated_keypath_component,none,
       "cannot form key path to%select{| distributed}0 actor-isolated %1 %2",
       (bool, DescriptiveDeclKind, DeclName))
@@ -4475,6 +4483,9 @@ ERROR(actor_cannot_conform_to_global_actor_protocol,none,
 NOTE(protocol_isolated_to_global_actor_here,none,
      "%0 is isolated to global actor %1 here", (Type, Type))
 
+ERROR(isolated_parameter_not_actor,none,
+      "'isolated' parameter has non-actor type %0", (Type))
+      
 WARNING(non_concurrent_param_type,none,
         "cannot pass argument of non-sendable type %0 across actors",
         (Type))
@@ -4585,22 +4596,6 @@ ERROR(concurrency_lib_missing,none,
       "module was not imported", (StringRef))
 ERROR(async_main_no_concurrency,none,
       "'_Concurrency' module not imported, required for async main", ())
-
-ERROR(global_actor_missing_shared,none,
-      "global actor %0 requires a static property 'shared' that produces an "
-      "actor instance", (Identifier))
-NOTE(global_actor_shared_not_static,none,
-     "'shared' property in global actor is not 'static'", ())
-NOTE(global_actor_shared_inaccessible,none,
-     "'shared' property has more restrictive access (%0) than its global actor "
-     "(%1)",
-     (StringRef, StringRef))
-NOTE(global_actor_shared_constrained_extension,none,
-     "'shared' property in global actor cannot be in a constrained extension",
-     ())
-NOTE(global_actor_shared_non_actor_type,none,
-     "'shared' property type %0 does not conform to the 'Actor' protocol",
-     (Type))
 
 ERROR(multiple_global_actors,none,
       "declaration can not have multiple global actor attributes (%0 and %1)",
@@ -5353,6 +5348,10 @@ ERROR(availability_stored_property_no_potential,
 ERROR(availability_enum_element_no_potential,
       none, "enum cases with associated values cannot be marked potentially unavailable with "
       "'@available'", ())
+
+WARNING(availability_enum_element_no_potential_warn,
+        none, "enum cases with associated values cannot be marked potentially unavailable with "
+        "'@available'", ())
 
 ERROR(availability_protocol_requires_version,
       none, "protocol %0 requires %1 to be available in %2 %3 and newer",

@@ -904,6 +904,9 @@ inline bool canAcceptUnownedValue(OperandOwnership operandOwnership) {
   llvm_unreachable("covered switch");
 }
 
+/// Return true if all OperandOwnership invariants hold.
+bool checkOperandOwnershipInvariants(const Operand *operand);
+
 /// Return the OperandOwnership for a forwarded operand when the forwarding
 /// operation has this "forwarding ownership" (as returned by
 /// getForwardingOwnershipKind()). \p allowUnowned is true for a subset of
@@ -1005,6 +1008,8 @@ public:
   /// Return the user that owns this use.
   SILInstruction *getUser() { return Owner; }
   const SILInstruction *getUser() const { return Owner; }
+
+  Operand *getNextUse() const { return NextUse; }
 
   /// Return true if this operand is a type dependent operand.
   ///

@@ -1230,7 +1230,18 @@ UnresolvedSpecializeExpr *UnresolvedSpecializeExpr::create(ASTContext &ctx,
                                              UnresolvedParams, RAngleLoc);
 }
 
+CaptureListEntry::CaptureListEntry(PatternBindingDecl *PBD) : PBD(PBD) {
+  assert(PBD);
+  assert(PBD->getSingleVar() &&
+         "Capture lists only support single-var patterns");
+}
+
+VarDecl *CaptureListEntry::getVar() const {
+  return PBD->getSingleVar();
+}
+
 bool CaptureListEntry::isSimpleSelfCapture() const {
+  auto *Var = getVar();
   auto &ctx = Var->getASTContext();
 
   if (Var->getName() != ctx.Id_self)
@@ -1240,10 +1251,10 @@ bool CaptureListEntry::isSimpleSelfCapture() const {
     if (attr->get() == ReferenceOwnership::Weak)
       return false;
 
-  if (Init->getPatternList().size() != 1)
+  if (PBD->getPatternList().size() != 1)
     return false;
 
-  auto *expr = Init->getInit(0);
+  auto *expr = PBD->getInit(0);
 
   if (auto *DRE = dyn_cast<DeclRefExpr>(expr)) {
     if (auto *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
@@ -1266,7 +1277,7 @@ CaptureListExpr *CaptureListExpr::create(ASTContext &ctx,
   auto *expr = ::new(mem) CaptureListExpr(captureList, closureBody);
 
   for (auto capture : captureList)
-    capture.Var->setParentCaptureList(expr);
+    capture.getVar()->setParentCaptureList(expr);
 
   return expr;
 }

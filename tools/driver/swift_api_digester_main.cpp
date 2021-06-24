@@ -610,7 +610,8 @@ void swift::ide::api::SDKNodeDeclType::diagnose(SDKNode *Right) {
 
     // It's not safe to stop inheriting convenience inits, it changes
     // the set of initializers that are available.
-    if (inheritsConvenienceInitializers() &&
+    if (!Ctx.checkingABI() &&
+        inheritsConvenienceInitializers() &&
         !R->inheritsConvenienceInitializers())
       R->emitDiag(R->getLoc(), diag::not_inheriting_convenience_inits);
     break;
@@ -2365,10 +2366,6 @@ static void setSDKPath(CompilerInvocation &InitInvok, bool IsBaseline,
       InitInvok.setSDKPath(SDK.str());
     } else if (const char *SDKROOT = getenv("SDKROOT")) {
       InitInvok.setSDKPath(SDKROOT);
-    } else {
-      llvm::errs() << "Provide '-sdk <path>' option or run with 'xcrun -sdk <..>\
-      swift-api-digester'\n";
-      exit(1);
     }
   }
 }

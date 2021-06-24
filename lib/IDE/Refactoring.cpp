@@ -4413,6 +4413,14 @@ struct AsyncHandlerParamDesc : public AsyncHandlerDesc {
     OS << tok::r_paren;
   }
 
+  /// Retrieves the parameter decl for the completion handler parameter, or
+  /// \c nullptr if no valid completion parameter is present.
+  const ParamDecl *getHandlerParam() const {
+    if (!isValid())
+      return nullptr;
+    return Func->getParameters()->get(Index);
+  }
+
   bool operator==(const AsyncHandlerParamDesc &Other) const {
     return Handler == Other.Handler && Type == Other.Type &&
            HasError == Other.HasError && Index == Other.Index;
@@ -4534,6 +4542,9 @@ struct CallbackCondition {
   ///   - `case .failure(let bind) = <Subject>`
   ///   - `let bind = try? <Subject>.get()`
   CallbackCondition(const Pattern *P, const Expr *Init) {
+    Init = Init->getSemanticsProvidingExpr();
+    P = P->getSemanticsProvidingPattern();
+
     if (auto *DRE = dyn_cast<DeclRefExpr>(Init)) {
       if (auto *OSP = dyn_cast<OptionalSomePattern>(P)) {
         // `let bind = <Subject>`
@@ -4560,7 +4571,8 @@ struct CallbackCondition {
   /// }
   /// ```
   CallbackCondition(const Decl *Subject, const CaseLabelItem *CaseItem) {
-    if (auto *EEP = dyn_cast<EnumElementPattern>(CaseItem->getPattern())) {
+    if (auto *EEP = dyn_cast<EnumElementPattern>(
+            CaseItem->getPattern()->getSemanticsProvidingPattern())) {
       // `case .<func>(let <bind>)`
       initFromEnumPattern(Subject, EEP);
     }
@@ -4752,22 +4764,87 @@ public:
 /// decls to any patterns they are used in.
 class ClassifiedBlock {
   NodesToPrint Nodes;
-  // closure param -> name
-  llvm::DenseMap<const Decl *, StringRef> BoundNames;
-  // var (ie. from a let binding) -> closure param
-  llvm::DenseMap<const Decl *, const Decl *> Aliases;
-  bool AllLet = true;
+
+  // A mapping of closure params to a list of patterns that bind them.
+  using ParamPatternBindingsMap =
+      llvm::MapVector<const Decl *, TinyPtrVector<const Pattern *>>;
+  ParamPatternBindingsMap ParamPatternBindings;
 
 public:
   const NodesToPrint &nodesToPrint() const { return Nodes; }
 
-  StringRef boundName(const Decl *D) const { return BoundNames.lookup(D); }
+  /// Attempt to retrieve an existing bound name for a closure parameter, or
+  /// an empty string if there's no suitable existing binding.
+  StringRef boundName(const Decl *D) const {
+    // Adopt the same name as the representative single pattern, if it only
+    // binds a single var.
+    if (auto *P = getSinglePatternFor(D)) {
+      if (P->getSingleVar())
+        return P->getBoundName().str();
+    }
+    return StringRef();
+  }
 
-  const llvm::DenseMap<const Decl *, const Decl *> &aliases() const {
+  /// Checks whether a closure parameter can be represented by a single pattern
+  /// that binds it. If the param is only bound by a single pattern, that will
+  /// be returned. If there's a pattern with a single var that binds it, that
+  /// will be returned, preferring a 'let' pattern to prefer out of line
+  /// printing of 'var' patterns.
+  const Pattern *getSinglePatternFor(const Decl *D) const {
+    auto Iter = ParamPatternBindings.find(D);
+    if (Iter == ParamPatternBindings.end())
+      return nullptr;
+
+    const auto &Patterns = Iter->second;
+    if (Patterns.empty())
+      return nullptr;
+    if (Patterns.size() == 1)
+      return Patterns[0];
+
+    // If we have multiple patterns, search for the best single var pattern to
+    // use, preferring a 'let' binding.
+    const Pattern *FirstSingleVar = nullptr;
+    for (auto *P : Patterns) {
+      if (!P->getSingleVar())
+        continue;
+
+      if (!P->hasAnyMutableBindings())
+        return P;
+
+      if (!FirstSingleVar)
+        FirstSingleVar = P;
+    }
+    return FirstSingleVar;
+  }
+
+  /// Retrieve any bound vars that are effectively aliases of a given closure
+  /// parameter.
+  llvm::SmallDenseSet<const Decl *> getAliasesFor(const Decl *D) const {
+    auto Iter = ParamPatternBindings.find(D);
+    if (Iter == ParamPatternBindings.end())
+      return {};
+
+    llvm::SmallDenseSet<const Decl *> Aliases;
+
+    // The single pattern that we replace the decl with is always an alias.
+    if (auto *P = getSinglePatternFor(D)) {
+      if (auto *SingleVar = P->getSingleVar())
+        Aliases.insert(SingleVar);
+    }
+
+    // Any other let bindings we have are also aliases.
+    for (auto *P : Iter->second) {
+      if (auto *SingleVar = P->getSingleVar()) {
+        if (!P->hasAnyMutableBindings())
+          Aliases.insert(SingleVar);
+      }
+    }
     return Aliases;
   }
 
-  bool allLet() const { return AllLet; }
+  const ParamPatternBindingsMap &paramPatternBindings() const {
+    return ParamPatternBindings;
+  }
 
   void addNodesInBraceStmt(BraceStmt *Brace) {
     Nodes.addNodesInBraceStmt(Brace);
@@ -4783,37 +4860,23 @@ public:
     Nodes.addNode(Node);
   }
 
-  void addBinding(const ClassifiedCondition &FromCondition,
-                  DiagnosticEngine &DiagEngine) {
-    if (!FromCondition.BindPattern)
+  void addBinding(const ClassifiedCondition &FromCondition) {
+    auto *P = FromCondition.BindPattern;
+    if (!P)
       return;
 
-    if (auto *BP =
-            dyn_cast_or_null<BindingPattern>(FromCondition.BindPattern)) {
-      if (!BP->isLet())
-        AllLet = false;
-    }
-
-    StringRef Name = FromCondition.BindPattern->getBoundName().str();
-    VarDecl *SingleVar = FromCondition.BindPattern->getSingleVar();
-    if (Name.empty() || !SingleVar)
+    // Patterns that don't bind anything aren't interesting.
+    SmallVector<VarDecl *, 2> Vars;
+    P->collectVariables(Vars);
+    if (Vars.empty())
       return;
 
-    auto Res = Aliases.try_emplace(SingleVar, FromCondition.Subject);
-    assert(Res.second && "Should not have seen this var before");
-    (void)Res;
-
-    // Use whichever name comes first
-    BoundNames.try_emplace(FromCondition.Subject, Name);
+    ParamPatternBindings[FromCondition.Subject].push_back(P);
   }
 
-  void addAllBindings(const ClassifiedCallbackConditions &FromConditions,
-                      DiagnosticEngine &DiagEngine) {
-    for (auto &Entry : FromConditions) {
-      addBinding(Entry.second, DiagEngine);
-      if (DiagEngine.hadAnyError())
-        return;
-    }
+  void addAllBindings(const ClassifiedCallbackConditions &FromConditions) {
+    for (auto &Entry : FromConditions)
+      addBinding(Entry.second);
   }
 };
 
@@ -4878,6 +4941,12 @@ private:
   llvm::DenseSet<const Decl *> UnwrapParams;
   const ParamDecl *ErrParam;
   bool IsResultParam;
+
+  /// This is set to \c true if we're currently classifying on a known condition
+  /// path, where \c CurrentBlock is set to the appropriate block. This lets us
+  /// be more lenient with unhandled conditions as we already know the block
+  /// we're supposed to be in.
+  bool IsKnownConditionPath = false;
 
   CallbackClassifier(ClassifiedBlocks &Blocks, const FuncDecl *Callee,
                      ArrayRef<const ParamDecl *> SuccessParams,
@@ -4983,6 +5052,11 @@ private:
   classifyCallbackCondition(const CallbackCondition &Cond,
                             const NodesToPrint &SuccessNodes, Stmt *ElseStmt) {
     if (!Cond.isValid())
+      return None;
+
+    // If the condition involves a refutable pattern, we can't currently handle
+    // it.
+    if (Cond.BindPattern && Cond.BindPattern->isRefutablePattern())
       return None;
 
     // For certain types of condition, they need to appear in certain lists.
@@ -5189,7 +5263,12 @@ private:
       // placeholders added (ideally we'd remove them)
       // TODO: Remove known conditions and split the `if` statement
 
-      if (CallbackConditions.empty()) {
+      if (IsKnownConditionPath) {
+        // If we're on a known condition path, we can be lenient as we already
+        // know what block we're in and can therefore just add the conditional
+        // straight to it.
+        CurrentBlock->addNode(Statement);
+      } else if (CallbackConditions.empty()) {
         // Technically this has a similar problem, ie. the else could have
         // conditions that should be in either success/error
         CurrentBlock->addNode(Statement);
@@ -5245,28 +5324,52 @@ private:
     // comments.
     CurrentBlock->addPossibleCommentLoc(Statement->getStartLoc());
 
-    ThenBlock->addAllBindings(CallbackConditions, DiagEngine);
-    if (DiagEngine.hadAnyError())
-      return;
+    ThenBlock->addAllBindings(CallbackConditions);
 
     // TODO: Handle nested ifs
     setNodes(ThenBlock, ElseBlock, std::move(ThenNodesToPrint));
 
     if (ElseStmt) {
       if (auto *BS = dyn_cast<BraceStmt>(ElseStmt)) {
-        setNodes(ElseBlock, ThenBlock, NodesToPrint::inBraceStmt(BS));
+        // If this is a guard statement, we know that we'll always exit,
+        // allowing us to classify any additional nodes into the opposite block.
+        auto AlwaysExits = isa<GuardStmt>(Statement);
+        setNodes(ElseBlock, ThenBlock, NodesToPrint::inBraceStmt(BS),
+                 AlwaysExits);
       } else {
+        // If we reached here, we should have an else if statement. Given we
+        // know we're in the else of a known condition, temporarily flip the
+        // current block, and set that we know what path we're on.
+        llvm::SaveAndRestore<bool> CondScope(IsKnownConditionPath, true);
+        llvm::SaveAndRestore<ClassifiedBlock *> BlockScope(CurrentBlock,
+                                                           ElseBlock);
         classifyNodes(ArrayRef<ASTNode>(ElseStmt),
                       /*endCommentLoc*/ SourceLoc());
       }
     }
   }
 
+  /// Adds \p Nodes to \p Block, potentially flipping the current block if we
+  /// can determine that the nodes being added will cause control flow to leave
+  /// the scope.
+  ///
+  /// \param Block The block to add the nodes to.
+  /// \param OtherBlock The block for the opposing condition path.
+  /// \param Nodes The nodes to add.
+  /// \param AlwaysExitsScope Whether the nodes being added always exit the
+  /// scope, and therefore whether the current block should be flipped.
   void setNodes(ClassifiedBlock *Block, ClassifiedBlock *OtherBlock,
-                NodesToPrint Nodes) {
-    if (Nodes.hasTrailingReturnOrBreak()) {
-      CurrentBlock = OtherBlock;
+                NodesToPrint Nodes, bool AlwaysExitsScope = false) {
+    // Drop an explicit trailing 'return' or 'break' if we can.
+    bool HasTrailingReturnOrBreak = Nodes.hasTrailingReturnOrBreak();
+    if (HasTrailingReturnOrBreak)
       Nodes.dropTrailingReturnOrBreakIfPossible();
+
+    // If we know we're exiting the scope, we can set IsKnownConditionPath, as
+    // we know any future nodes should be classified into the other block.
+    if (HasTrailingReturnOrBreak || AlwaysExitsScope) {
+      CurrentBlock = OtherBlock;
+      IsKnownConditionPath = true;
       Block->addAllNodes(std::move(Nodes));
     } else {
       Block->addAllNodes(std::move(Nodes));
@@ -5318,7 +5421,12 @@ private:
       auto CC = classifyCallbackCondition(
           CallbackCondition(ErrParam, &Items[0]), SuccessNodes,
           /*elseStmt*/ nullptr);
-      if (CC && CC->Path == ConditionPath::FAILURE)
+      if (!CC) {
+        DiagEngine.diagnose(CS->getLoc(), diag::unknown_callback_case_item);
+        return;
+      }
+
+      if (CC->Path == ConditionPath::FAILURE)
         std::swap(Block, OtherBlock);
 
       // We'll be dropping the case, but make sure to keep any attached
@@ -5331,10 +5439,7 @@ private:
         Block->addPossibleCommentLoc(SS->getRBraceLoc());
 
       setNodes(Block, OtherBlock, std::move(SuccessNodes));
-      if (CC)
-        Block->addBinding(*CC, DiagEngine);
-      if (DiagEngine.hadAnyError())
-        return;
+      Block->addBinding(*CC);
     }
     // Mark this switch statement as having been transformed.
     HandledSwitches.insert(SS);
@@ -5462,10 +5567,10 @@ private:
     return shouldWalkInto(S->getSourceRange());
   }
 
-  std::pair<bool, Pattern *> walkToPatternPre(Pattern *P) {
+  bool walkToPatternPre(Pattern *P) override {
     if (P == Target.dyn_cast<Pattern *>())
       AfterTarget = true;
-    return { shouldWalkInto(P->getSourceRange()), P };
+    return shouldWalkInto(P->getSourceRange());
   }
 
   bool shouldWalkInto(SourceRange Range) {
@@ -5475,18 +5580,20 @@ private:
 };
 
 /// Similar to the \c ReferenceCollector but collects references in all scopes
-/// without any starting point in each scope.
+/// without any starting point in each scope. In addition, it tracks the number
+/// of references to a decl in a given scope.
 class ScopedDeclCollector : private SourceEntityWalker {
 public:
   using DeclsTy = llvm::DenseSet<const Decl *>;
+  using RefDeclsTy = llvm::DenseMap<const Decl *, /*numRefs*/ unsigned>;
 
 private:
-  using ScopedDeclsTy = llvm::DenseMap<const Stmt *, DeclsTy>;
+  using ScopedDeclsTy = llvm::DenseMap<const Stmt *, RefDeclsTy>;
 
   struct Scope {
     DeclsTy DeclaredDecls;
-    DeclsTy *ReferencedDecls;
-    Scope(DeclsTy *ReferencedDecls) : DeclaredDecls(),
+    RefDeclsTy *ReferencedDecls;
+    Scope(RefDeclsTy *ReferencedDecls) : DeclaredDecls(),
         ReferencedDecls(ReferencedDecls) {}
   };
 
@@ -5502,7 +5609,7 @@ public:
     walk(Node);
   }
 
-  DeclsTy *getReferencedDecls(Stmt *Scope) {
+  const RefDeclsTy *getReferencedDecls(Stmt *Scope) const {
     auto Res = ReferencedDecls.find(Scope);
     if (Res == ReferencedDecls.end())
       return nullptr;
@@ -5516,7 +5623,7 @@ private:
 
     ScopeStack.back().DeclaredDecls.insert(D);
     if (isa<DeclContext>(D))
-      ScopeStack.back().ReferencedDecls->insert(D);
+      (*ScopeStack.back().ReferencedDecls)[D] += 1;
     return true;
   }
 
@@ -5527,8 +5634,10 @@ private:
     if (!E->isImplicit()) {
       if (auto *DRE = dyn_cast<DeclRefExpr>(E)) {
         if (auto *D = DRE->getDecl()) {
+          // If we have a reference that isn't declared in the same scope,
+          // increment the number of references to that decl.
           if (!D->isImplicit() && !ScopeStack.back().DeclaredDecls.count(D))
-            ScopeStack.back().ReferencedDecls->insert(D);
+            (*ScopeStack.back().ReferencedDecls)[D] += 1;
         }
       }
     }
@@ -5551,9 +5660,10 @@ private:
         // Add any referenced decls to the parent scope that weren't declared
         // there.
         auto &ParentStack = ScopeStack[NumScopes - 2];
-        for (auto *D : *ScopeStack.back().ReferencedDecls) {
+        for (auto DeclAndNumRefs : *ScopeStack.back().ReferencedDecls) {
+          auto *D = DeclAndNumRefs.first;
           if (!ParentStack.DeclaredDecls.count(D))
-            ParentStack.ReferencedDecls->insert(D);
+            (*ParentStack.ReferencedDecls)[D] += DeclAndNumRefs.second;
         }
       }
       ScopeStack.pop_back();
@@ -5642,6 +5752,12 @@ class AsyncConverter : private SourceEntityWalker {
   // Whether a completion handler body is currently being hoisted out of its
   // call
   bool Hoisting = false;
+
+  /// Whether a pattern is currently being converted.
+  bool ConvertingPattern = false;
+
+  /// A mapping of inline patterns to print for closure parameters.
+  using InlinePatternsToPrint = llvm::DenseMap<const Decl *, const Pattern *>;
 
 public:
   /// Convert a function
@@ -5790,8 +5906,8 @@ private:
 
   /// Prints a tuple of elements, or a lone single element if only one is
   /// present, using the provided printing function.
-  template <typename T, typename PrintFn>
-  void addTupleOf(ArrayRef<T> Elements, llvm::raw_ostream &OS,
+  template <typename Container, typename PrintFn>
+  void addTupleOf(const Container &Elements, llvm::raw_ostream &OS,
                   PrintFn PrintElt) {
     if (Elements.size() == 1) {
       PrintElt(Elements[0]);
@@ -5892,8 +6008,7 @@ private:
       // cont.resume(returning: (res1, res2, ...))
       OS << ContName << tok::period << "resume" << tok::l_paren;
       OS << "returning" << tok::colon << " ";
-      addTupleOf(llvm::makeArrayRef(SuccessParamNames), OS,
-                 [&](auto Ref) { OS << Ref; });
+      addTupleOf(SuccessParamNames, OS, [&](auto Ref) { OS << Ref; });
       OS << tok::r_paren << "\n";
       break;
     }
@@ -5994,6 +6109,37 @@ private:
     addRange(LastAddedLoc, Node.getEndLoc(), /*ToEndOfToken=*/true);
   }
 
+  void convertPattern(const Pattern *P) {
+    // Only print semantic patterns. This cleans up the output of the transform
+    // and works around some bogus source locs that can appear with typed
+    // patterns in if let statements.
+    P = P->getSemanticsProvidingPattern();
+
+    // Set up the start of the pattern as the last loc printed to make sure we
+    // accurately fill in the gaps as we customize the printing of sub-patterns.
+    llvm::SaveAndRestore<SourceLoc> RestoreLoc(LastAddedLoc, P->getStartLoc());
+    llvm::SaveAndRestore<bool> RestoreFlag(ConvertingPattern, true);
+
+    walk(const_cast<Pattern *>(P));
+    addRange(LastAddedLoc, P->getEndLoc(), /*ToEndOfToken*/ true);
+  }
+
+  bool walkToPatternPre(Pattern *P) override {
+    // If we're not converting a pattern, there's nothing extra to do.
+    if (!ConvertingPattern)
+      return true;
+
+    // When converting a pattern, don't print the 'let' or 'var' of binding
+    // subpatterns, as they're illegal when nested in PBDs, and we print a
+    // top-level one.
+    if (auto *BP = dyn_cast<BindingPattern>(P)) {
+      return addCustom(BP->getSourceRange(), [&]() {
+        convertPattern(BP->getSubPattern());
+      });
+    }
+    return true;
+  }
+
   bool walkToDeclPre(Decl *D, CharSourceRange Range) override {
     if (isa<PatternBindingDecl>(D)) {
       NestedExprCount++;
@@ -6002,14 +6148,16 @@ private:
 
     // Functions and types already have their names in \c ScopedNames, only
     // variables should need to be renamed.
-    if (isa<VarDecl>(D) && Names.find(D) == Names.end()) {
-      Identifier Ident = assignUniqueName(D, StringRef());
-      if (!Ident.empty()) {
+    if (isa<VarDecl>(D)) {
+      // If we don't already have a name for the var, assign it one. Note that
+      // vars in binding patterns may already have assigned names here.
+      if (Names.find(D) == Names.end()) {
+        auto Ident = assignUniqueName(D, StringRef());
         ScopedNames.back().insert(Ident);
-        addCustom(D->getSourceRange(), [&]() {
-          OS << Ident.str();
-        });
       }
+      addCustom(D->getSourceRange(), [&]() {
+        OS << newNameFor(D);
+      });
     }
 
     // Note we don't walk into any nested local function decls. If we start
@@ -6029,6 +6177,14 @@ private:
     // TODO: Handle Result.get as well
     if (auto *DRE = dyn_cast<DeclRefExpr>(E)) {
       if (auto *D = DRE->getDecl()) {
+        // Look through to the parent var decl if we have one. This ensures we
+        // look at the var in a case stmt's pattern rather than the var that's
+        // implicitly declared in the body.
+        if (auto *VD = dyn_cast<VarDecl>(D)) {
+          if (auto *Parent = VD->getParentVarDecl())
+            D = Parent;
+        }
+
         bool AddPlaceholder = Placeholders.count(D);
         StringRef Name = newNameFor(D, false);
         if (AddPlaceholder || !Name.empty())
@@ -6107,7 +6263,10 @@ private:
       // The body of those statements will include the decls if they've been
       // referenced, so shadowing is still avoided there.
       if (auto *ReferencedDecls = ScopedDecls.getReferencedDecls(S)) {
-        addNewScope(*ReferencedDecls);
+        llvm::DenseSet<const Decl *> Decls;
+        for (auto DeclAndNumRefs : *ReferencedDecls)
+          Decls.insert(DeclAndNumRefs.first);
+        addNewScope(Decls);
       } else {
         addNewScope({});
       }
@@ -6163,6 +6322,13 @@ private:
 
   void addFuncDecl(const FuncDecl *FD) {
     auto *Params = FD->getParameters();
+    auto *HandlerParam = TopHandler.getHandlerParam();
+
+    // If the completion handler parameter has a default argument, the async
+    // version is effectively @discardableResult, as not all the callers care
+    // about receiving the completion call.
+    if (HandlerParam && HandlerParam->isDefaultArgument())
+      OS << tok::at_sign << "discardableResult" << "\n";
 
     // First chunk: start -> the parameter to remove (if any)
     SourceLoc LeftEndLoc = Params->getLParenLoc().getAdvancedLoc(1);
@@ -6340,8 +6506,9 @@ private:
         if (!HandlerDesc.willAsyncReturnVoid()) {
           OS << tok::kw_return << " ";
         }
-        addAwaitCall(CE, ArgList.ref(), ClassifiedBlock(), {}, HandlerDesc,
-                     /*AddDeclarations=*/false);
+        InlinePatternsToPrint InlinePatterns;
+        addAwaitCall(CE, ArgList.ref(), ClassifiedBlock(), {}, InlinePatterns,
+                     HandlerDesc, /*AddDeclarations*/ false);
         return;
       }
       // We are not removing the completion handler, so we can call it once the
@@ -6358,8 +6525,10 @@ private:
                                       .str();
           addHoistedNamedCallback(
               CalledFunc, CompletionHandler, HandlerName, [&] {
+                InlinePatternsToPrint InlinePatterns;
                 addAwaitCall(CE, ArgList.ref(), ClassifiedBlock(), {},
-                             HandlerDesc, /*AddDeclarations=*/false);
+                             InlinePatterns, HandlerDesc,
+                             /*AddDeclarations*/ false);
               });
           return;
         }
@@ -6416,20 +6585,25 @@ private:
     }
 
     if (DiagEngine.hadAnyError()) {
-      // Can only fallback when the results are params, in which case only
-      // the names are used (defaulted to the names of the params if none)
-      if (HandlerDesc.Type != HandlerType::PARAMS)
+      // For now, only fallback when the results are params with an error param,
+      // in which case only the names are used (defaulted to the names of the
+      // params if none).
+      if (HandlerDesc.Type != HandlerType::PARAMS || !HandlerDesc.HasError)
         return;
       DiagEngine.resetHadAnyError();
 
+      // Note that we don't print any inline patterns here as we just want
+      // assignments to the names in the outer scope.
+      InlinePatternsToPrint InlinePatterns;
+
       // Don't do any unwrapping or placeholder replacement since all params
       // are still valid in the fallback case
-      prepareNames(ClassifiedBlock(), CallbackParams);
+      prepareNames(ClassifiedBlock(), CallbackParams, InlinePatterns);
 
       addFallbackVars(CallbackParams, Blocks);
       addDo();
       addAwaitCall(CE, ArgList.ref(), Blocks.SuccessBlock, SuccessParams,
-                   HandlerDesc, /*AddDeclarations=*/!HandlerDesc.HasError);
+                   InlinePatterns, HandlerDesc, /*AddDeclarations*/ false);
       addFallbackCatch(ErrParam);
       OS << "\n";
       convertNodes(NodesToPrint::inBraceStmt(CallbackBody));
@@ -6470,19 +6644,26 @@ private:
       addDo();
     }
 
-    prepareNames(Blocks.SuccessBlock, SuccessParams);
+    auto InlinePatterns =
+        getInlinePatternsToPrint(Blocks.SuccessBlock, SuccessParams, Callback);
+
+    prepareNames(Blocks.SuccessBlock, SuccessParams, InlinePatterns);
     preparePlaceholdersAndUnwraps(HandlerDesc, SuccessParams, ErrParam,
                                   /*Success=*/true);
 
     addAwaitCall(CE, ArgList.ref(), Blocks.SuccessBlock, SuccessParams,
-                 HandlerDesc, /*AddDeclarations=*/true);
+                 InlinePatterns, HandlerDesc, /*AddDeclarations*/ true);
+    printOutOfLineBindingPatterns(Blocks.SuccessBlock, InlinePatterns);
     convertNodes(Blocks.SuccessBlock.nodesToPrint());
     clearNames(SuccessParams);
 
     if (RequireDo) {
-      // Always use the ErrParam name if none is bound
+      // We don't use inline patterns for the error path.
+      InlinePatternsToPrint ErrInlinePatterns;
+
+      // Always use the ErrParam name if none is bound.
       prepareNames(Blocks.ErrorBlock, llvm::makeArrayRef(ErrParam),
-                   HandlerDesc.Type != HandlerType::RESULT);
+                   ErrInlinePatterns, HandlerDesc.Type != HandlerType::RESULT);
       preparePlaceholdersAndUnwraps(HandlerDesc, SuccessParams, ErrParam,
                                     /*Success=*/false);
 
@@ -6543,15 +6724,123 @@ private:
     }
   }
 
+  /// Checks whether a binding pattern for a given decl can be printed inline in
+  /// an await call, e.g 'let ((x, y), z) = await foo()', where '(x, y)' is the
+  /// inline pattern.
+  const Pattern *
+  bindingPatternToPrintInline(const Decl *D, const ClassifiedBlock &Block,
+                              const ClosureExpr *CallbackClosure) {
+    // Only currently done for callback closures.
+    if (!CallbackClosure)
+      return nullptr;
+
+    // If we can reduce the pattern bindings down to a single pattern, we may
+    // be able to print it inline.
+    auto *P = Block.getSinglePatternFor(D);
+    if (!P)
+      return nullptr;
+
+    // Patterns that bind a single var are always printed inline.
+    if (P->getSingleVar())
+      return P;
+
+    // If we have a multi-var binding, and the decl being bound is referenced
+    // elsewhere in the block, we cannot print the pattern immediately in the
+    // await call. Instead, we'll print it out of line.
+    auto *Decls = ScopedDecls.getReferencedDecls(CallbackClosure->getBody());
+    assert(Decls);
+    auto NumRefs = Decls->lookup(D);
+    return NumRefs == 1 ? P : nullptr;
+  }
+
+  /// Retrieve a map of patterns to print inline for an array of param decls.
+  InlinePatternsToPrint
+  getInlinePatternsToPrint(const ClassifiedBlock &Block,
+                           ArrayRef<const ParamDecl *> Params,
+                           const ClosureExpr *CallbackClosure) {
+    InlinePatternsToPrint Patterns;
+    for (auto *Param : Params) {
+      if (auto *P = bindingPatternToPrintInline(Param, Block, CallbackClosure))
+        Patterns[Param] = P;
+    }
+    return Patterns;
+  }
+
+  /// Print any out of line binding patterns that could not be printed as inline
+  /// patterns. These typically appear directly after an await call, e.g:
+  /// \code
+  /// let x = await foo()
+  /// let (y, z) = x
+  /// \endcode
+  void
+  printOutOfLineBindingPatterns(const ClassifiedBlock &Block,
+                                const InlinePatternsToPrint &InlinePatterns) {
+    for (auto &Entry : Block.paramPatternBindings()) {
+      auto *D = Entry.first;
+      auto Aliases = Block.getAliasesFor(D);
+
+      for (auto *P : Entry.second) {
+        // If we already printed this as an inline pattern, there's nothing else
+        // to do.
+        if (InlinePatterns.lookup(D) == P)
+          continue;
+
+        // If this is an alias binding, it can be elided.
+        if (auto *SingleVar = P->getSingleVar()) {
+          if (Aliases.contains(SingleVar))
+            continue;
+        }
+
+        auto HasMutable = P->hasAnyMutableBindings();
+        OS << "\n" << (HasMutable ? tok::kw_var : tok::kw_let) << " ";
+        convertPattern(P);
+        OS << " = ";
+        OS << newNameFor(D);
+      }
+    }
+  }
+
+  /// Prints an \c await call to an \c async function, binding any return values
+  /// into variables.
+  ///
+  /// \param CE The call expr to convert.
+  /// \param Args The arguments of the call expr.
+  /// \param SuccessBlock The nodes present in the success block following the
+  /// call.
+  /// \param SuccessParams The success parameters, which will be printed as
+  /// return values.
+  /// \param InlinePatterns A map of patterns that can be printed inline for
+  /// a given param.
+  /// \param HandlerDesc A description of the completion handler.
+  /// \param AddDeclarations Whether or not to add \c let or \c var keywords to
+  /// the return value bindings.
   void addAwaitCall(const CallExpr *CE, ArrayRef<Expr *> Args,
                     const ClassifiedBlock &SuccessBlock,
                     ArrayRef<const ParamDecl *> SuccessParams,
+                    const InlinePatternsToPrint &InlinePatterns,
                     const AsyncHandlerDesc &HandlerDesc, bool AddDeclarations) {
     // Print the bindings to match the completion handler success parameters,
     // making sure to omit in the case of a Void return.
     if (!SuccessParams.empty() && !HandlerDesc.willAsyncReturnVoid()) {
+      auto AllLet = true;
+
+      // Gather the items to print for the variable bindings. This can either be
+      // a param decl, or a pattern that binds it.
+      using DeclOrPattern = llvm::PointerUnion<const Decl *, const Pattern *>;
+      SmallVector<DeclOrPattern, 4> ToPrint;
+      for (auto *Param : SuccessParams) {
+        // Check if we have an inline pattern to print.
+        if (auto *P = InlinePatterns.lookup(Param)) {
+          if (P->hasAnyMutableBindings())
+            AllLet = false;
+          ToPrint.push_back(P);
+          continue;
+        }
+        ToPrint.push_back(Param);
+      }
+
       if (AddDeclarations) {
-        if (SuccessBlock.allLet()) {
+        if (AllLet) {
           OS << tok::kw_let;
         } else {
           OS << tok::kw_var;
@@ -6559,8 +6848,13 @@ private:
         OS << " ";
       }
       // 'res =' or '(res1, res2, ...) ='
-      addTupleOf(SuccessParams, OS,
-                 [&](auto &Param) { OS << newNameFor(Param); });
+      addTupleOf(ToPrint, OS, [&](DeclOrPattern Elt) {
+        if (auto *P = Elt.dyn_cast<const Pattern *>()) {
+          convertPattern(P);
+          return;
+        }
+        OS << newNameFor(Elt.get<const Decl *>());
+      });
       OS << " " << tok::equal << " ";
     }
 
@@ -6655,17 +6949,26 @@ private:
   /// name will be added.
   void prepareNames(const ClassifiedBlock &Block,
                     ArrayRef<const ParamDecl *> Params,
+                    const InlinePatternsToPrint &InlinePatterns,
                     bool AddIfMissing = true) {
     for (auto *PD : Params) {
-      StringRef Name = Block.boundName(PD);
-      if (!Name.empty() || AddIfMissing)
-        assignUniqueName(PD, Name);
-    }
+      // If this param is to be replaced by a pattern that binds multiple
+      // separate vars, it's not actually going to be added to the scope, and
+      // therefore doesn't need naming. This avoids needing to rename a var with
+      // the same name later on in the scope, as it's not actually clashing.
+      if (auto *P = InlinePatterns.lookup(PD)) {
+        if (!P->getSingleVar())
+          continue;
+      }
+      auto Name = Block.boundName(PD);
+      if (Name.empty() && !AddIfMissing)
+        continue;
 
-    for (auto &Entry : Block.aliases()) {
-      auto It = Names.find(Entry.second);
-      assert(It != Names.end() && "Param should already have an entry");
-      Names[Entry.first] = It->second;
+      auto Ident = assignUniqueName(PD, Name);
+
+      // Also propagate the name to any aliases.
+      for (auto *Alias : Block.getAliasesFor(PD))
+        Names[Alias] = Ident;
     }
   }
 
@@ -6727,8 +7030,8 @@ private:
 
   void addNewScope(const llvm::DenseSet<const Decl *> &Decls) {
     ScopedNames.push_back({});
-    for (auto *D : Decls) {
-      auto Name = getDeclName(D);
+    for (auto DeclAndNumRefs : Decls) {
+      auto Name = getDeclName(DeclAndNumRefs);
       if (!Name.empty())
         ScopedNames.back().insert(Name);
     }

@@ -91,9 +91,9 @@ static AsyncLetImpl *asImpl(const AsyncLet *alet) {
 
 SWIFT_CC(swift)
 static void swift_asyncLet_startImpl(AsyncLet *alet,
+                                     TaskOptionRecord *options,
                                      const Metadata *futureResultType,
-                                     void *closureEntryPoint,
-                                     void *closureContext) {
+                                     void *closureEntryPoint, void *closureContext) {
   AsyncTask *parent = swift_task_getCurrent();
   assert(parent && "async-let cannot be created without parent task");
 
@@ -103,9 +103,9 @@ static void swift_asyncLet_startImpl(AsyncLet *alet,
 
   auto childTaskAndContext = swift_task_create_async_let_future(
       flags.getOpaqueValue(),
+      options,
       futureResultType,
-      closureEntryPoint,
-      closureContext);
+      closureEntryPoint, closureContext);
 
   AsyncTask *childTask = childTaskAndContext.Task;
 
@@ -120,6 +120,7 @@ static void swift_asyncLet_startImpl(AsyncLet *alet,
   swift_task_addStatusRecord(record);
 
   // schedule the task
+  // TODO: use the executor that may have been suggested in options
   swift_task_enqueueGlobal(childTask);
 }
 
@@ -128,18 +129,23 @@ static void swift_asyncLet_startImpl(AsyncLet *alet,
 
 SWIFT_CC(swiftasync)
 static void swift_asyncLet_waitImpl(
-    OpaqueValue *result, SWIFT_ASYNC_CONTEXT AsyncContext *rawContext,
-    AsyncLet *alet, Metadata *T) {
+    OpaqueValue *result, SWIFT_ASYNC_CONTEXT AsyncContext *callerContext,
+    AsyncLet *alet, TaskContinuationFunction *resumeFunction,
+    AsyncContext *callContext) {
   auto task = alet->getTask();
-  swift_task_future_wait(result, rawContext, task, T);
+  swift_task_future_wait(result, callerContext, task, resumeFunction,
+                         callContext);
 }
 
 SWIFT_CC(swiftasync)
 static void swift_asyncLet_wait_throwingImpl(
-    OpaqueValue *result, SWIFT_ASYNC_CONTEXT AsyncContext *rawContext,
-    AsyncLet *alet, Metadata *T) {
+    OpaqueValue *result, SWIFT_ASYNC_CONTEXT AsyncContext *callerContext,
+    AsyncLet *alet,
+    ThrowingTaskFutureWaitContinuationFunction *resumeFunction,
+    AsyncContext * callContext) {
   auto task = alet->getTask();
-  swift_task_future_wait_throwing(result, rawContext, task, T);
+  swift_task_future_wait_throwing(result, callerContext, task, resumeFunction,
+                                  callContext);
 }
 
 // =============================================================================

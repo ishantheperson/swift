@@ -120,7 +120,7 @@ namespace irgen {
                                            CanSILFunctionType originalType,
                                            CanSILFunctionType substitutedType,
                                            SubstitutionMap substitutionMap,
-                                           bool suppressGenerics,
+                                           bool useSpecialConvention,
                                            FunctionPointer::Kind kind);
 
   /// Given an async function, get the pointer to the function to be called and
@@ -232,13 +232,18 @@ namespace irgen {
   llvm::Value *emitTaskCreate(
     IRGenFunction &IGF, llvm::Value *flags,
     llvm::Value *taskGroup,
+    llvm::Value *taskOptions,
     llvm::Value *futureResultType,
-    llvm::Value *taskFunction, llvm::Value *localContextInfo,
+    llvm::Value *taskFunction,
+    llvm::Value *localContextInfo,
     SubstitutionMap subs);
 
   /// Allocate task local storage for the provided dynamic size.
   Address emitAllocAsyncContext(IRGenFunction &IGF, llvm::Value *sizeValue);
   void emitDeallocAsyncContext(IRGenFunction &IGF, Address context);
+  Address emitStaticAllocAsyncContext(IRGenFunction &IGF, Size size);
+  void emitStaticDeallocAsyncContext(IRGenFunction &IGF, Address context,
+                                     Size size);
 
   void emitAsyncFunctionEntry(IRGenFunction &IGF,
                               const AsyncContextLayout &layout,

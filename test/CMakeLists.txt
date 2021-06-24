@@ -95,7 +95,8 @@ function(get_test_dependencies SDK result_var_name)
       llvm-readelf
       llvm-readobj
       llvm-strings
-      not)
+      not
+      split-file)
   endif()
 
   if(("${SDK}" STREQUAL "IOS") OR
@@ -151,6 +152,10 @@ endif()
 if(NOT CMAKE_CFG_INTDIR STREQUAL ".")
   list(APPEND SWIFT_LIT_ARGS
        "--param" "build_mode=${CMAKE_CFG_INTDIR}")
+endif()
+
+if(SWIFT_TOOLS_ENABLE_LIBSWIFT)
+  list(APPEND SWIFT_LIT_ARGS "--param" "libswift")
 endif()
 
 if (LLVM_USE_SANITIZER STREQUAL "Address")

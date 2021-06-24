@@ -1225,6 +1225,7 @@ static std::string getFixItStringForDecodable(ClassDecl *CD,
 static void diagnoseClassWithoutInitializers(ClassDecl *classDecl) {
   ASTContext &C = classDecl->getASTContext();
   C.Diags.diagnose(classDecl, diag::class_without_init,
+                   classDecl->isExplicitActor(),
                    classDecl->getDeclaredType());
 
   // HACK: We've got a special case to look out for and diagnose specifically to
@@ -1440,7 +1441,7 @@ void TypeChecker::diagnoseDuplicateBoundVars(Pattern *pattern) {
 void TypeChecker::diagnoseDuplicateCaptureVars(CaptureListExpr *expr) {
   SmallVector<VarDecl *, 2> captureListVars;
   for (auto &capture : expr->getCaptureList())
-    captureListVars.push_back(capture.Var);
+    captureListVars.push_back(capture.getVar());
 
   diagnoseDuplicateDecls(captureListVars);
 }
@@ -2395,9 +2396,11 @@ public:
     if (auto superclass = CD->getSuperclassDecl()) {
       // Actors cannot have superclasses, nor can they be superclasses.
       if (CD->isActor() && !superclass->isNSObject())
-        CD->diagnose(diag::actor_inheritance);
+        CD->diagnose(diag::actor_inheritance,
+                     /*distributed=*/CD->isDistributedActor());
       else if (superclass->isActor())
-        CD->diagnose(diag::actor_inheritance);
+        CD->diagnose(diag::actor_inheritance,
+                     /*distributed=*/CD->isDistributedActor());
     }
 
     // Force lowering of stored properties.

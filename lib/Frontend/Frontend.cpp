@@ -156,7 +156,9 @@ SerializationOptions CompilerInvocation::computeSerializationOptions(
   serializationOpts.ModuleLinkName = opts.ModuleLinkName;
   serializationOpts.UserModuleVersion = opts.UserModuleVersion;
   serializationOpts.ExtraClangOptions = getClangImporterOptions().ExtraArgs;
-  
+  serializationOpts.PublicDependentLibraries =
+      getIRGenOptions().PublicLinkLibraries;
+
   if (opts.EmitSymbolGraph) {
     if (!opts.SymbolGraphOutputDir.empty()) {
       serializationOpts.SymbolGraphOutputDir = opts.SymbolGraphOutputDir;
@@ -767,7 +769,7 @@ static bool shouldImportConcurrencyByDefault(const llvm::Triple &target) {
     return true;
   if (target.isOSLinux())
     return true;
-#if SWIFT_ENABLE_EXPERIMENTAL_CONCURRENCY
+#if SWIFT_IMPLICIT_CONCURRENCY_IMPORT
   if (target.isOSOpenBSD())
     return true;
 #endif

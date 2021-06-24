@@ -874,11 +874,16 @@ static Optional<RequirementMatch> findMissingGenericRequirementForSolutionFix(
   type = solution.simplifyType(type);
   missingType = solution.simplifyType(missingType);
 
-  missingType = missingType->mapTypeOutOfContext();
-  if (missingType->hasTypeParameter())
-    if (auto env = conformance->getGenericEnvironment())
-      if (auto assocType = env->mapTypeIntoContext(missingType))
-        missingType = assocType;
+  if (auto *env = conformance->getGenericEnvironment()) {
+    // We use subst() with LookUpConformanceInModule here, because
+    // associated type inference failures mean that we can end up
+    // here with a DependentMemberType with an ArchetypeType base.
+    missingType = missingType.subst(
+      [&](SubstitutableType *type) -> Type {
+        return env->mapTypeIntoContext(type->mapTypeOutOfContext());
+      },
+      LookUpConformanceInModule(conformance->getDeclContext()->getParentModule()));
+  }
 
   auto missingRequirementMatch = [&](Type type) -> RequirementMatch {
     Requirement requirement(requirementKind, type, missingType);
@@ -4642,14 +4647,19 @@ void ConformanceChecker::resolveValueWitnesses() {
         return;
 
       // Ensure that Actor.unownedExecutor is implemented within the
-      // actor class itself.
+      // actor class itself.  But if this somehow resolves to the
+      // requirement, ignore it.
       if (requirement->getName().isSimpleName(C.Id_unownedExecutor) &&
           Proto->isSpecificProtocol(KnownProtocolKind::Actor) &&
           DC != witness->getDeclContext() &&
+          !isa<ProtocolDecl>(witness->getDeclContext()) &&
           Adoptee->getClassOrBoundGenericClass() &&
           Adoptee->getClassOrBoundGenericClass()->isActor()) {
         witness->diagnose(diag::unowned_executor_outside_actor);
-        return;
+        // FIXME: This diagnostic was temporarily downgraded from an error to a
+        // warning because it spuriously triggers when building the Foundation
+        // module from its textual swiftinterface. (rdar://78932296)
+        //return;
       }
 
       // Objective-C checking for @objc requirements.
@@ -5841,6 +5851,31 @@ void TypeChecker::checkConformancesInContext(IterableDeclContext *idc) {
       }
     } else if (proto->isSpecificProtocol(KnownProtocolKind::Sendable)) {
       SendableConformance = conformance;
+    } else if (proto->isSpecificProtocol(KnownProtocolKind::DistributedActor)) {
+      if (auto classDecl = dyn_cast<ClassDecl>(nominal)) {
+        if (!classDecl->isDistributedActor()) {
+          if (classDecl->isActor()) {
+            dc->getSelfNominalTypeDecl()
+            ->diagnose(diag::distributed_actor_protocol_illegal_inheritance,
+                       dc->getSelfNominalTypeDecl()->getName())
+                       .fixItInsert(classDecl->getStartLoc(), "distributed ");
+          } else {
+            dc->getSelfNominalTypeDecl()
+            ->diagnose(diag::actor_protocol_illegal_inheritance,
+                       dc->getSelfNominalTypeDecl()->getName())
+                       .fixItReplace(nominal->getStartLoc(), "distributed actor");
+          }
+        }
+      }
+    } else if (proto->isSpecificProtocol(KnownProtocolKind::Actor)) {
+      if (auto classDecl = dyn_cast<ClassDecl>(nominal)) {
+        if (!classDecl->isExplicitActor()) {
+          dc->getSelfNominalTypeDecl()
+              ->diagnose(diag::actor_protocol_illegal_inheritance,
+                         dc->getSelfNominalTypeDecl()->getName())
+              .fixItReplace(nominal->getStartLoc(), "actor");
+        }
+      }
     } else if (proto->isSpecificProtocol(
                    KnownProtocolKind::UnsafeSendable)) {
       unsafeSendableConformance = conformance;

@@ -136,6 +136,13 @@ uintptr_t
 swift_reflection_metadataForObject(SwiftReflectionContextRef ContextRef,
                                    uintptr_t Object);
 
+/// Returns the nominal type descriptor given the metadata
+SWIFT_REMOTE_MIRROR_LINKAGE
+swift_reflection_ptr_t
+swift_reflection_metadataNominalTypeDescriptor(SwiftReflectionContextRef ContextRef,
+																							 swift_reflection_ptr_t Metadata);
+
+
 /// Returns an opaque type reference for a class or closure context
 /// instance pointer, or NULL if one can't be constructed.
 ///
@@ -246,6 +253,19 @@ int swift_reflection_projectExistential(SwiftReflectionContextRef ContextRef,
                                         swift_typeref_t ExistentialTypeRef,
                                         swift_typeref_t *OutInstanceTypeRef,
                                         swift_addr_t *OutStartOfInstanceData);
+
+/// Like swift_reflection_projectExistential, with 2 differences:
+///
+/// - When dealing with an error existential, this version will dereference 
+///   the ExistentialAddress before proceeding.
+/// - After setting OutInstanceTypeRef and OutStartOfInstanceData this version
+///   may derefence and set OutStartOfInstanceData if OutInstanceTypeRef is a 
+///   class TypeRef.
+SWIFT_REMOTE_MIRROR_LINKAGE
+int swift_reflection_projectExistentialAndUnwrapClass(
+    SwiftReflectionContextRef ContextRef, swift_addr_t ExistentialAddress,
+    swift_typeref_t ExistentialTypeRef, swift_typeref_t *OutInstanceTypeRef,
+    swift_addr_t *OutStartOfInstanceData);
 
 /// Projects the value of an enum.
 ///

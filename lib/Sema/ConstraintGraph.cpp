@@ -103,6 +103,23 @@ ConstraintGraphNode::getEquivalenceClassUnsafe() const{
 }
 
 #pragma mark Node mutation
+
+static bool isUsefulForReferencedVars(Constraint *constraint) {
+  switch (constraint->getKind()) {
+    // Don't attempt to propagate information about `Bind`s and
+    // `BindOverload`s to referenced variables since they are
+    // adjacent through that binding already, and there is no
+    // useful information in trying to process that kind of
+    // constraint.
+  case ConstraintKind::Bind:
+  case ConstraintKind::BindOverload:
+    return false;
+
+  default:
+    return true;
+  }
+}
+
 void ConstraintGraphNode::addConstraint(Constraint *constraint) {
   assert(ConstraintIndex.count(constraint) == 0 && "Constraint re-insertion");
   ConstraintIndex[constraint] = Constraints.size();
@@ -111,9 +128,11 @@ void ConstraintGraphNode::addConstraint(Constraint *constraint) {
   {
     introduceToInference(constraint);
 
-    notifyReferencedVars([&](ConstraintGraphNode &referencedVar) {
-      referencedVar.introduceToInference(constraint);
-    });
+    if (isUsefulForReferencedVars(constraint)) {
+      notifyReferencedVars([&](ConstraintGraphNode &referencedVar) {
+        referencedVar.introduceToInference(constraint);
+      });
+    }
   }
 }
 
@@ -129,9 +148,11 @@ void ConstraintGraphNode::removeConstraint(Constraint *constraint) {
   {
     retractFromInference(constraint);
 
-    notifyReferencedVars([&](ConstraintGraphNode &referencedVar) {
-      referencedVar.retractFromInference(constraint);
-    });
+    if (isUsefulForReferencedVars(constraint)) {
+      notifyReferencedVars([&](ConstraintGraphNode &referencedVar) {
+        referencedVar.retractFromInference(constraint);
+      });
+    }
   }
 
   // If this is the last constraint, just pop it off the list and we're done.
@@ -230,6 +251,9 @@ void ConstraintGraphNode::addToEquivalenceClass(
       for (auto *constraint : node.getConstraints()) {
         introduceToInference(constraint);
 
+        if (!isUsefulForReferencedVars(constraint))
+          continue;
+
         notifyReferencedVars([&](ConstraintGraphNode &referencedVar) {
           referencedVar.introduceToInference(constraint);
         });
@@ -295,22 +319,6 @@ inference::PotentialBindings &ConstraintGraphNode::getCurrentBindings() {
   return *Bindings;
 }
 
-static bool isUsefulForReferencedVars(Constraint *constraint) {
-  switch (constraint->getKind()) {
-  // Don't attempt to propagate information about `Bind`s and
-  // `BindOverload`s to referenced variables since they are
-  // adjacent through that binding already, and there is no
-  // useful information in trying to process that kind of
-  // constraint.
-  case ConstraintKind::Bind:
-  case ConstraintKind::BindOverload:
-    return false;
-
-  default:
-    return true;
-  }
-}
-
 void ConstraintGraphNode::introduceToInference(Constraint *constraint) {
   if (forRepresentativeVar()) {
     auto fixedType = TypeVar->getImpl().getFixedType(/*record=*/nullptr);
@@ -321,15 +329,6 @@ void ConstraintGraphNode::introduceToInference(Constraint *constraint) {
         getTypeVariable()->getImpl().getRepresentative(/*record=*/nullptr);
     CG[repr].introduceToInference(constraint);
   }
-
-  /*
-  if (!notifyReferencedVars || !isUsefulForReferencedVars(constraint))
-    return;
-
-  this->notifyReferencedVars([&](ConstraintGraphNode &referencedVar) {
-    referencedVar.introduceToInference(constraint);
-  });
-*/
 }
 
 void ConstraintGraphNode::retractFromInference(Constraint *constraint) {
@@ -342,15 +341,6 @@ void ConstraintGraphNode::retractFromInference(Constraint *constraint) {
         getTypeVariable()->getImpl().getRepresentative(/*record=*/nullptr);
     CG[repr].retractFromInference(constraint);
   }
-
-  /*
-  if (!notifyReferencedVars || !isUsefulForReferencedVars(constraint))
-    return;
-
-  this->notifyReferencedVars([&](ConstraintGraphNode &referencedVar) {
-                               referencedVar.retractFromInference(constraint);
-  });
-  */
 }
 
 void ConstraintGraphNode::reintroduceToInference(Constraint *constraint) {
