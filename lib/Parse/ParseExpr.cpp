@@ -14,6 +14,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "swift/AST/DiagnosticEngine.h"
 #include "swift/Parse/Parser.h"
 #include "swift/AST/ASTWalker.h"
 #include "swift/AST/Attr.h"
@@ -595,9 +596,10 @@ ParserResult<Expr> Parser::parseExprUnary(Diag<> Message, bool isExprBasic) {
                   Operator, formUnaryArgument(Context, SubExpr.get())));
 }
 
+// TODO: use NullablePointer<Expr>
 Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {  
-  // Semantics: 
-  // es ~> es' ⊢ chain { e1; rest } ~> bind(e1, { _ in es' })
+  // Semantics (e ~> e' means e desugars into e')
+  // es ~> es' ⊢ chain { e1; rest } ~> bind(e1, { _ in return es' })
   //           ⊢ chain { e } ~> e
   // es ~> es' ⊢ chain { let p = e1 ; es } ~> bind(e1, { let p = $0; return es' })
   // chain { let p = e } ~> error: Chain cannot end with binding
@@ -609,7 +611,6 @@ Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {
 
   const ASTNode &first = nodes[0];
   if (auto *expr = first.dyn_cast<Expr *>()) {
-    unsigned discriminator = CurLocalContext->claimNextClosureDiscriminator();
 
     // Transform remainder
     auto *es = desugarChainExpr(nodes.slice(1), range);
@@ -622,48 +623,107 @@ Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {
 
     // Create closure-expression
     DeclAttributes attributes;
-    SourceRange bracketRange = expr->getSourceRange();
+    SourceRange bracketRange = range; // !!! Should this be different
     SmallVector<CaptureListEntry, 0> captureList;
     VarDecl *capturedSelfDecl = nullptr;
-    ParameterList *params;
     SourceLoc asyncLoc;
     SourceLoc throwsLoc;
     SourceLoc arrowLoc;
     TypeExpr *explicitResultType = nullptr;
     SourceLoc inLoc;
+    unsigned discriminator = CurLocalContext->claimNextClosureDiscriminator();
 
-    SmallVector<ParamDecl*, 1> elements;
     auto discardVar = new (Context) ParamDecl(SourceLoc(), SourceLoc(), Identifier(), SourceLoc(), Identifier(), nullptr);
     discardVar->setSpecifier(ParamSpecifier::Default);
-    elements.push_back(discardVar);
-    params = ParameterList::create(Context, elements);
-
+    auto *params = ParameterList::create(Context, {discardVar});
 
     auto *closure = new (Context) ClosureExpr(
       attributes, bracketRange, capturedSelfDecl, params, asyncLoc, throwsLoc,
       arrowLoc, inLoc, explicitResultType, discriminator, CurDeclContext
     );
 
+    // es is returned by us - has loc info? 
     auto *returnStmt = new (Context) ReturnStmt(SourceLoc(), es);
 
     closure->setBody(
-      BraceStmt::create(Context, range.Start, {returnStmt}, range.End),
+      BraceStmt::create(Context, expr->getStartLoc(), {returnStmt}, range.End),
       /*isSingleExpression=*/false);
 
+    // expr might have loc info? 
     return CallExpr::createImplicit(Context, bind, {expr, closure}, {});
 
-  } else if (auto *patternBindingDecl = dyn_cast_or_null<PatternBindingDecl>(first.dyn_cast<Decl *>())) {
-    // Decls consist of PatternBindingDecl followed by VarDecl
-    auto varDecl = dyn_cast<VarDecl>(nodes[1].dyn_cast<Decl *>());
+  } 
+  
+  if (auto *patternBindingDecl = dyn_cast_or_null<PatternBindingDecl>(first.dyn_cast<Decl *>())) {
+    auto *expr = patternBindingDecl->getInit(0);
+
+    // Decls consist of PatternBindingDecl followed by VarDecls for every new 
+    // variable introduced
+    SmallVector<VarDecl *, 2> varDecls;
+    for (auto &node : nodes.slice(1)) {
+      if (auto *varDecl = dyn_cast_or_null<VarDecl>(node.dyn_cast<Decl *>())) {
+        // Probably also need to adjust sourceloc info.
+        varDecls.push_back(varDecl);
+      } else break; 
+    }
+    
+    auto bind = new (Context) UnresolvedDeclRefExpr(bindName, DeclRefKind::Ordinary, DeclNameLoc());
+
+    // Create closure-expression
+    DeclAttributes attributes;
+    SourceRange bracketRange;
+    SmallVector<CaptureListEntry, 0> captureList;
+    VarDecl *capturedSelfDecl = nullptr;
+    SourceLoc asyncLoc;
+    SourceLoc throwsLoc;
+    SourceLoc arrowLoc;
+    TypeExpr *explicitResultType = nullptr;
+    SourceLoc inLoc;
+    unsigned discriminator = CurLocalContext->claimNextClosureDiscriminator();
+
+    Identifier varID = varDecls[0]->getName();
+    auto var = new (Context) ParamDecl(
+      SourceLoc(), SourceLoc(), Identifier(), SourceLoc(), 
+      varID, nullptr);
+    var->setSpecifier(ParamSpecifier::Default);
+    auto *params = ParameterList::create(Context, {var});
+
+    auto *closure = new (Context) ClosureExpr(
+      attributes, bracketRange, capturedSelfDecl, params, asyncLoc, throwsLoc,
+      arrowLoc, inLoc, explicitResultType, discriminator, CurDeclContext
+    );
 
     // Transform remainder
-    auto *es = desugarChainExpr(nodes.slice(2), range);
+    setLocalDiscriminatorToParamList(params);
+    ParseFunctionBody cc(*this, closure);
+    auto *es = desugarChainExpr(nodes.slice(1 + varDecls.size()), range);
     assert(es != nullptr && "chain expression cannot end with let binding");
-    assert(false && "Unimplemented");
+
+    // DeclName varName(varID);
+    // auto *varRef = UnresolvedDeclRefExpr::createImplicit(Context, varName);
+
+    // auto *closurePatternBinding = PatternBindingDecl::createImplicit(
+    //   Context, StaticSpellingKind::None, 
+    //   patternBindingDecl->getPattern(0), varRef, 
+    //   /* probably wrong */ CurDeclContext);
+    
+    auto *returnStmt = new (Context) ReturnStmt(SourceLoc(), es);
+
+    SmallVector<ASTNode, 4> bodyStmts;
+    // bodyStmts.push_back(closurePatternBinding);
+    // std::copy(varDecls.begin(), varDecls.end(), std::back_inserter(bodyStmts));
+    bodyStmts.push_back(returnStmt);
+
+    closure->setBody(
+      BraceStmt::create(Context, expr->getStartLoc(), bodyStmts, range.End),
+      /*isSingleExpression=*/false);
+
+    // TODO: fix up all the source locations :)
+    return CallExpr::createImplicit(Context, bind, {expr, closure}, {});
   } else {
     llvm::errs() << "Unexpected item in chain expression:";
     first.dump();
-    assert(false);
+    abort();
   }
 }
 
@@ -679,12 +739,13 @@ ParserResult<Expr> Parser::parseExprChain() {
 
   SmallVector<ASTNode, 4> bodyElements;
   status |= parseBraceItems(bodyElements);
+  assert(!bodyElements.empty() && "chain expression cannot be empty");
 
   SourceLoc closeBrace = consumeToken(tok::r_brace);
 
   SourceRange range(bodyElements.front().getStartLoc(), bodyElements.back().getEndLoc());
   auto *chainExpr = desugarChainExpr(bodyElements, range);
-  assert(chainExpr != nullptr && "Empty chain expression not allowed");
+  assert(chainExpr != nullptr);
 
   llvm::errs() << "Created chainExpr:\n";
   chainExpr->dump();
