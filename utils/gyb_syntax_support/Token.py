@@ -201,6 +201,7 @@ SYNTAX_TOKENS = [
     ExprKeyword('True', 'true', serialization_code=51),
     ExprKeyword('Try', 'try', serialization_code=52),
     ExprKeyword('Throws', 'throws', serialization_code=53),
+    ExprKeyword('Chain', 'chain', serialization_code=124),
 
     Keyword('__FILE__', '__FILE__', serialization_code=54),
     Keyword('__LINE__', '__LINE__', serialization_code=55),
@@ -245,7 +246,8 @@ SYNTAX_TOKENS = [
                serialization_code=96),
     Punctuator('Arrow', 'arrow', text='->', requires_trailing_space=True,
                serialization_code=78),
-
+    Punctuator('LeftArrow', 'left_arrow', text='<-', requires_trailing_space=True,
+               serialization_code=125),
 
     Punctuator('Backtick', 'backtick', text='`', serialization_code=79),
 

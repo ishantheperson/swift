@@ -518,6 +518,7 @@ static Expr *formUnaryArgument(ASTContext &context, Expr *argument) {
 ///     expr-postfix(Mode)
 ///     operator-prefix expr-unary(Mode)
 ///     '&' expr-unary(Mode)
+///     expr-chain
 ///
 ParserResult<Expr> Parser::parseExprUnary(Diag<> Message, bool isExprBasic) {
   SyntaxParsingContext UnaryContext(SyntaxContext, SyntaxContextKind::Expr);
@@ -567,6 +568,9 @@ ParserResult<Expr> Parser::parseExprUnary(Diag<> Message, bool isExprBasic) {
           .fixItRemoveChars(OperEndLoc, Tok.getLoc());
     break;
   }
+
+  case tok::kw_chain: 
+    return parseExprChain();
   }
 
   ParserResult<Expr> SubExpr = parseExprUnary(Message, isExprBasic);
@@ -589,6 +593,103 @@ ParserResult<Expr> Parser::parseExprUnary(Diag<> Message, bool isExprBasic) {
   return makeParserResult(
       Status, new (Context) PrefixUnaryExpr(
                   Operator, formUnaryArgument(Context, SubExpr.get())));
+}
+
+Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {  
+  // Semantics: 
+  // es ~> es' ⊢ chain { e1; rest } ~> bind(e1, { _ in es' })
+  //           ⊢ chain { e } ~> e
+  // es ~> es' ⊢ chain { let p = e1 ; es } ~> bind(e1, { let p = $0; return es' })
+  // chain { let p = e } ~> error: Chain cannot end with binding
+
+  if (nodes.empty()) return nullptr;
+
+  // bind(_:_)
+  DeclNameRef bindName(DeclName(Context, Context.Id_bind, {Identifier(), Identifier()}));
+
+  const ASTNode &first = nodes[0];
+  if (auto *expr = first.dyn_cast<Expr *>()) {
+    unsigned discriminator = CurLocalContext->claimNextClosureDiscriminator();
+
+    // Transform remainder
+    auto *es = desugarChainExpr(nodes.slice(1), range);
+    if (es == nullptr) {
+      // Last expression, no need to do anything
+      return expr;
+    }
+
+    auto bind = new (Context) UnresolvedDeclRefExpr(bindName, DeclRefKind::Ordinary, DeclNameLoc());
+
+    // Create closure-expression
+    DeclAttributes attributes;
+    SourceRange bracketRange = expr->getSourceRange();
+    SmallVector<CaptureListEntry, 0> captureList;
+    VarDecl *capturedSelfDecl = nullptr;
+    ParameterList *params;
+    SourceLoc asyncLoc;
+    SourceLoc throwsLoc;
+    SourceLoc arrowLoc;
+    TypeExpr *explicitResultType = nullptr;
+    SourceLoc inLoc;
+
+    SmallVector<ParamDecl*, 1> elements;
+    auto discardVar = new (Context) ParamDecl(SourceLoc(), SourceLoc(), Identifier(), SourceLoc(), Identifier(), nullptr);
+    discardVar->setSpecifier(ParamSpecifier::Default);
+    elements.push_back(discardVar);
+    params = ParameterList::create(Context, elements);
+
+
+    auto *closure = new (Context) ClosureExpr(
+      attributes, bracketRange, capturedSelfDecl, params, asyncLoc, throwsLoc,
+      arrowLoc, inLoc, explicitResultType, discriminator, CurDeclContext
+    );
+
+    auto *returnStmt = new (Context) ReturnStmt(SourceLoc(), es);
+
+    closure->setBody(
+      BraceStmt::create(Context, range.Start, {returnStmt}, range.End),
+      /*isSingleExpression=*/false);
+
+    return CallExpr::createImplicit(Context, bind, {expr, closure}, {});
+
+  } else if (auto *patternBindingDecl = dyn_cast_or_null<PatternBindingDecl>(first.dyn_cast<Decl *>())) {
+    // Decls consist of PatternBindingDecl followed by VarDecl
+    auto varDecl = dyn_cast<VarDecl>(nodes[1].dyn_cast<Decl *>());
+
+    // Transform remainder
+    auto *es = desugarChainExpr(nodes.slice(2), range);
+    assert(es != nullptr && "chain expression cannot end with let binding");
+    assert(false && "Unimplemented");
+  } else {
+    llvm::errs() << "Unexpected item in chain expression:";
+    first.dump();
+    assert(false);
+  }
+}
+
+/// expr-chain:
+///   chain { <stmt>+ }
+/// 
+ParserResult<Expr> Parser::parseExprChain() {
+  // SyntaxParsingContext syntaxContext(SyntaxContext, SyntaxContextKind::Decl);
+  ParserStatus status;
+
+  SourceLoc chainLoc = consumeToken(tok::kw_chain);
+  SourceLoc _openBrace = consumeToken(tok::l_brace);
+
+  SmallVector<ASTNode, 4> bodyElements;
+  status |= parseBraceItems(bodyElements);
+
+  SourceLoc closeBrace = consumeToken(tok::r_brace);
+
+  SourceRange range(bodyElements.front().getStartLoc(), bodyElements.back().getEndLoc());
+  auto *chainExpr = desugarChainExpr(bodyElements, range);
+  assert(chainExpr != nullptr && "Empty chain expression not allowed");
+
+  llvm::errs() << "Created chainExpr:\n";
+  chainExpr->dump();
+
+  return makeParserResult(status, chainExpr);
 }
 
 /// expr-keypath-swift:

@@ -211,9 +211,16 @@ unsigned SourceManager::getByteDistance(SourceLoc Start, SourceLoc End) const {
 #ifndef NDEBUG
   unsigned BufferID = findBufferContainingLoc(Start);
   auto *Buffer = LLVMSourceMgr.getMemoryBuffer(BufferID);
-  assert(End.Value.getPointer() >= Buffer->getBuffer().begin() &&
+  if (!(End.Value.getPointer() >= Buffer->getBuffer().begin() &&
          End.Value.getPointer() <= Buffer->getBuffer().end() &&
-         "End location is not from the same buffer");
+         "End location is not from the same buffer")) 
+  {
+    llvm::errs() << "Ptrs: end " << (void*)End.Value.getPointer() 
+      << " bufferStart " << (void*)Buffer->getBuffer().begin()
+      << " bufferEnd " << (void*)Buffer->getBuffer().end() 
+      << "\n";
+    assert(false);
+  }
 #endif
   // When we have a rope buffer, could be implemented in terms of
   // getLocOffsetInBuffer().

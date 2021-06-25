@@ -225,6 +225,7 @@ IDENTIFIER(quantifier)
 IDENTIFIER(Captured)
 IDENTIFIER(Array)
 IDENTIFIER(Substring)
+IDENTIFIER(bind)
 
 IDENTIFIER(arrayLiteral)
 IDENTIFIER(dictionaryLiteral)
