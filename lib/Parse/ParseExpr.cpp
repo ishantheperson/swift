@@ -604,17 +604,14 @@ Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {
   // es ~> es' ⊢ chain { let p = e1 ; es } ~> bind(e1, { let p = $0; return es' })
   // chain { let p = e } ~> error: Chain cannot end with binding
 
-  if (nodes.empty()) return nullptr;
+  assert(!nodes.empty());
 
   // bind(_:_)
   DeclNameRef bindName(DeclName(Context, Context.Id_bind, {Identifier(), Identifier()}));
 
   const ASTNode &first = nodes[0];
   if (auto *expr = first.dyn_cast<Expr *>()) {
-
-    // Transform remainder
-    auto *es = desugarChainExpr(nodes.slice(1), range);
-    if (es == nullptr) {
+    if (nodes.size() == 1) {
       // Last expression, no need to do anything
       return expr;
     }
@@ -642,11 +639,15 @@ Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {
       arrowLoc, inLoc, explicitResultType, discriminator, CurDeclContext
     );
 
+    setLocalDiscriminatorToParamList(params);
+    ParseFunctionBody cc(*this, closure);
+    auto *es = desugarChainExpr(nodes.slice(1), range);
+
     // es is returned by us - has loc info? 
     auto *returnStmt = new (Context) ReturnStmt(SourceLoc(), es);
 
     closure->setBody(
-      BraceStmt::create(Context, expr->getStartLoc(), {returnStmt}, range.End),
+      BraceStmt::create(Context, expr->getEndLoc(), {returnStmt}, range.End),
       /*isSingleExpression=*/false);
 
     // expr might have loc info? 
@@ -715,7 +716,7 @@ Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {
     bodyStmts.push_back(returnStmt);
 
     closure->setBody(
-      BraceStmt::create(Context, expr->getStartLoc(), bodyStmts, range.End),
+      BraceStmt::create(Context, expr->getEndLoc(), bodyStmts, range.End),
       /*isSingleExpression=*/false);
 
     // TODO: fix up all the source locations :)
