@@ -667,6 +667,8 @@ Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {
         varDecls.push_back(varDecl);
       } else break; 
     }
+
+    assert(varDecls.size() == 1 && "Currently only only one variable can be bound");
     
     auto bind = new (Context) UnresolvedDeclRefExpr(bindName, DeclRefKind::Ordinary, DeclNameLoc());
 
@@ -683,10 +685,12 @@ Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {
     unsigned discriminator = CurLocalContext->claimNextClosureDiscriminator();
 
     Identifier varID = varDecls[0]->getName();
-    auto var = new (Context) ParamDecl(
+    auto *var = new (Context) ParamDecl(
       SourceLoc(), SourceLoc(), Identifier(), SourceLoc(), 
       varID, nullptr);
     var->setSpecifier(ParamSpecifier::Default);
+    // TODO: this needs to be fixed
+    var->setTypeRepr(varDecls[0]->getTypeReprOrParentPatternTypeRepr());
     auto *params = ParameterList::create(Context, {var});
 
     auto *closure = new (Context) ClosureExpr(
@@ -694,11 +698,10 @@ Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {
       arrowLoc, inLoc, explicitResultType, discriminator, CurDeclContext
     );
 
-    // Transform remainder
+    // Transform remainder  
     setLocalDiscriminatorToParamList(params);
     ParseFunctionBody cc(*this, closure);
     auto *es = desugarChainExpr(nodes.slice(1 + varDecls.size()), range);
-    assert(es != nullptr && "chain expression cannot end with let binding");
 
     // DeclName varName(varID);
     // auto *varRef = UnresolvedDeclRefExpr::createImplicit(Context, varName);
@@ -719,11 +722,9 @@ Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {
       BraceStmt::create(Context, expr->getEndLoc(), bodyStmts, range.End),
       /*isSingleExpression=*/false);
 
-    // TODO: fix up all the source locations :)
     return CallExpr::createImplicit(Context, bind, {expr, closure}, {});
   } else {
-    llvm::errs() << "Unexpected item in chain expression:";
-    first.dump();
+    llvm::errs() << "Unexpected item in chain expression\n";
     abort();
   }
 }
