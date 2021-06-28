@@ -79,6 +79,13 @@ func oneOf<T>(_ choices: [Parser<T>]) -> Parser<T> {
   }
 }
 
+extension Parser {
+  /// Postfix version of 'oneOf' for convenience
+  func or(_ alternative: Parser<T>) -> Parser<T> {
+    oneOf([self, alternative])
+  }
+}
+
 /// Matches one specific character
 func char(_ c: Character) -> Parser<Character> {
   satisfies { c == $0 }
@@ -104,14 +111,13 @@ func takeWhile(_ predicate: @escaping (Character) -> Bool) -> Parser<String> {
 }
 
 /// A parser which either runs 'parser' or doesn't consume input
-func optionally<T>(_ _: T.Type, _ parser: Parser<T>) -> Parser<T?> {
-  optionally(parser)
+func optionally<T>(_ parser: Parser<T>) -> Parser<T?> {
+  parser.map(Optional.some).or(succeed(.none))
 }
 
-func optionally<T>(_ parser: Parser<T>) -> Parser<T?> {
-  Parser { input in 
-      return [(.none, input)] + map(parser, Optional.some).run(input)
-  }
+/// Convenience form of 'optionally' which lets you specify the type directly
+func optionally<T>(_ _: T.Type, _ parser: Parser<T>) -> Parser<T?> {
+  optionally(parser)
 }
 
 /// The equivalent of Kleene star, repeatedly applies 'parser'
@@ -168,9 +174,7 @@ func atMost<T>(times: Int, _ parser: Parser<T>) -> Parser<[T]> {
       succeed([elem] + rest)
     }
 
-    return Parser { input in 
-      takeOne.run(input) + [([], input)]
-    }
+    return takeOne.or(succeed([]))
   }
 }
 
@@ -251,13 +255,12 @@ let unicodeData: Parser<(UnicodeScalar, UnicodeScalar?)> = chain {
     unicodeScalar
   })
 
-  // 
   succeed((scalarStart, scalarEnd))
 }
 
 print(unicodeData.run(on: "0600..0605 ; "))
 
-let cryptos = choice(["bitcoin", "dogecoin", "etherium"].map(string))
+let cryptos = oneOf(["bitcoin", "dogecoin", "etherium"].map(string))
 
 // Generic chain examples
 func bind<T, R>(_ v: [T], _ f: (T) -> [R]) -> [R] {
