@@ -189,36 +189,6 @@ func between<T>(_ lowerBound: Int, and upperBound: Int, _ parser: Parser<T>) -> 
   }
 }
 
-// let aabb: Parser<(Int, Int)> = bind(zeroOrMore(char("A"))) {
-//   let Acount = $0.count 
-//   return bind(zeroOrMore(char("B"))) {
-//     let Bcount = $0.count 
-//     return bind(eof) { _ in 
-//       return succeed((Acount, Bcount))
-//     }
-//   }
-// }
-
-// print(aabb(Array("AAABB")[...]))
-
-// let e = chain { 
-//   let first = parser 
-//   let rest = zeroOrMore(parser)
-//   succeed([first] + rest)
-// }
-
-// Semantics: 
-// es ~> es' ⊢ chain { e1; rest } ~> bind(e1, { _ in es' })
-//           ⊢ chain { e } ~> e
-// es ~> es' ⊢ chain { let p = e1 ; es } ~> bind(e1, { let p = $0; return es' })
-// chain { let p = e } ~> error: Chain cannot end with binding
-
-// let aabb: Parser<(Int, Int)> = chain {
-//   let Acount = zeroOrMore(char("A")).map { $0.count }
-//   let BCount = zeroOrMore(char("B")).map { $0.count }
-//   succeed((Acount, Bcount))
-// }
-
 let foo: Parser<(Int, Int)> = chain {
   let a = zeroOrMore(char("A"))
   let b = zeroOrMore(char("B"))
@@ -228,19 +198,14 @@ let foo: Parser<(Int, Int)> = chain {
 
 print(foo.run(on: "AAAABBB"))
 
-let iToS = { Int($0)! }
-
-let number: Parser<Int> = chain {
-  let n = takeWhile({ $0.isWholeNumber }).map(iToS)
-  skipSpaces
-  string("cyz")
+let number: Parser<Int?> = chain {
+  let n: Int? = takeWhile(\.isWholeNumber).map(Int.init)
   eof
   succeed(n)
 }
 
-print("Running number test")
 // deferences nullptr for some reason 
-// print(number.run(on: "1234 cyz"))
+// print(number.run(on: "1234"))
 
 let skipSpaces = ignore(takeWhile({ $0.isWhitespace }))
 
@@ -259,8 +224,6 @@ let unicodeData: Parser<(UnicodeScalar, UnicodeScalar?)> = chain {
 }
 
 print(unicodeData.run(on: "0600..0605 ; "))
-
-let cryptos = oneOf(["bitcoin", "dogecoin", "etherium"].map(string))
 
 // Generic chain examples
 func bind<T, R>(_ v: [T], _ f: (T) -> [R]) -> [R] {
