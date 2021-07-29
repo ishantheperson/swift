@@ -226,7 +226,7 @@ IDENTIFIER(Captured)
 IDENTIFIER(Array)
 IDENTIFIER(Substring)
 IDENTIFIER(bind)
-IDENTIFIER_WITH_NAME(bindingID, "longNameToAvoidNameCollisions")
+IDENTIFIER(unit)
 
 IDENTIFIER(arrayLiteral)
 IDENTIFIER(dictionaryLiteral)

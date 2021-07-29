@@ -608,16 +608,13 @@ Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {
 
   // bind(_:_)
   DeclNameRef bindName(DeclName(Context, Context.Id_bind, {Identifier(), Identifier()}));
+  auto bind = new (Context) UnresolvedDeclRefExpr(bindName, DeclRefKind::Ordinary, DeclNameLoc());
 
   const ASTNode &first = nodes[0];
-  if (auto *expr = first.dyn_cast<Expr *>()) {
-    if (nodes.size() == 1) {
-      // Last expression, no need to do anything
-      return expr;
-    }
 
-    auto bind = new (Context) UnresolvedDeclRefExpr(bindName, DeclRefKind::Ordinary, DeclNameLoc());
 
+  /// Creates a ClosureExpr with one parameter which has the given name and type
+  auto createClosureExpr = [&](Identifier varName, TypeRepr *varTypeRepr) -> ClosureExpr* {
     // Create closure-expression
     DeclAttributes attributes;
     SourceRange bracketRange = range; // !!! Should this be different
@@ -630,9 +627,10 @@ Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {
     SourceLoc inLoc;
     unsigned discriminator = CurLocalContext->claimNextClosureDiscriminator();
 
-    auto discardVar = new (Context) ParamDecl(SourceLoc(), SourceLoc(), Identifier(), SourceLoc(), Identifier(), nullptr);
-    discardVar->setSpecifier(ParamSpecifier::Default);
-    auto *params = ParameterList::create(Context, {discardVar});
+    auto paramVar = new (Context) ParamDecl(SourceLoc(), SourceLoc(), Identifier(), SourceLoc(), varName, nullptr);
+    paramVar->setSpecifier(ParamSpecifier::Default);
+    paramVar->setTypeRepr(varTypeRepr);
+    auto *params = ParameterList::create(Context, {paramVar});
 
     auto *closure = new (Context) ClosureExpr(
       attributes, bracketRange, capturedSelfDecl, params, asyncLoc, throwsLoc,
@@ -640,6 +638,17 @@ Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {
     );
 
     setLocalDiscriminatorToParamList(params);
+    return closure;
+  };
+
+  if (auto *expr = first.dyn_cast<Expr *>()) {
+    if (nodes.size() == 1) {
+      // Last expression, no need to do anything
+      return expr;
+    }
+
+    auto *closure = createClosureExpr(Identifier(), nullptr);
+
     ParseFunctionBody cc(*this, closure);
     auto *es = desugarChainExpr(nodes.slice(1), range);
 
@@ -650,11 +659,39 @@ Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {
       BraceStmt::create(Context, expr->getEndLoc(), {returnStmt}, range.End),
       /*isSingleExpression=*/false);
 
-    // expr might have loc info? 
     return CallExpr::createImplicit(Context, bind, {expr, closure}, {});
-
   } 
-  
+  if (auto *returnStmt = dyn_cast_or_null<ReturnStmt>(first.dyn_cast<Stmt *>())) {
+    if (!returnStmt->hasResult()) {
+      llvm::errs() << "Return statement must have a return value in a chain expression\n";
+      exit(1);
+    }
+
+    auto *expr = returnStmt->getResult();
+    // Convert to a call to 'unit(expr)';
+    DeclNameRef unitName(DeclName(Context, Context.Id_unit, {Identifier()}));
+    auto unit = new (Context) UnresolvedDeclRefExpr(unitName, DeclRefKind::Ordinary, DeclNameLoc());
+
+    expr = CallExpr::createImplicit(Context, unit, {expr}, {});
+    if (nodes.size() == 1) {
+      return expr;
+    }
+
+    auto *closure = createClosureExpr(Identifier(), nullptr);
+
+    ParseFunctionBody cc(*this, closure);
+    auto *es = desugarChainExpr(nodes.slice(1), range);
+
+    // es is returned by us - has loc info? 
+    auto *closureReturnStmt = new (Context) ReturnStmt(SourceLoc(), es);
+
+    closure->setBody(
+      BraceStmt::create(Context, expr->getEndLoc(), {closureReturnStmt}, range.End),
+      /*isSingleExpression=*/false);
+
+    return CallExpr::createImplicit(Context, bind, {expr, closure}, {});
+    
+  }
   if (auto *patternBindingDecl = dyn_cast_or_null<PatternBindingDecl>(first.dyn_cast<Decl *>())) {
     auto *expr = patternBindingDecl->getInit(0);
 
@@ -672,34 +709,10 @@ Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {
     
     auto bind = new (Context) UnresolvedDeclRefExpr(bindName, DeclRefKind::Ordinary, DeclNameLoc());
 
-    // Create closure-expression
-    DeclAttributes attributes;
-    SourceRange bracketRange;
-    SmallVector<CaptureListEntry, 0> captureList;
-    VarDecl *capturedSelfDecl = nullptr;
-    SourceLoc asyncLoc;
-    SourceLoc throwsLoc;
-    SourceLoc arrowLoc;
-    TypeExpr *explicitResultType = nullptr;
-    SourceLoc inLoc;
-    unsigned discriminator = CurLocalContext->claimNextClosureDiscriminator();
-
-    Identifier varID = varDecls[0]->getName();
-    auto *var = new (Context) ParamDecl(
-      SourceLoc(), SourceLoc(), Identifier(), SourceLoc(), 
-      varID, nullptr);
-    var->setSpecifier(ParamSpecifier::Default);
-    // TODO: this needs to be fixed
-    var->setTypeRepr(varDecls[0]->getTypeReprOrParentPatternTypeRepr());
-    auto *params = ParameterList::create(Context, {var});
-
-    auto *closure = new (Context) ClosureExpr(
-      attributes, bracketRange, capturedSelfDecl, params, asyncLoc, throwsLoc,
-      arrowLoc, inLoc, explicitResultType, discriminator, CurDeclContext
-    );
-
     // Transform remainder  
-    setLocalDiscriminatorToParamList(params);
+    Identifier varID = varDecls[0]->getName();
+    auto *closure = createClosureExpr(varID, varDecls.front()->getTypeReprOrParentPatternTypeRepr());
+    
     ParseFunctionBody cc(*this, closure);
     auto *es = desugarChainExpr(nodes.slice(1 + varDecls.size()), range);
 
@@ -723,10 +736,10 @@ Expr *Parser::desugarChainExpr(ArrayRef<ASTNode> nodes, SourceRange range) {
       /*isSingleExpression=*/false);
 
     return CallExpr::createImplicit(Context, bind, {expr, closure}, {});
-  } else {
-    llvm::errs() << "Unexpected item in chain expression\n";
-    abort();
   }
+    
+  llvm::errs() << "Unexpected item in chain expression\n";
+  abort();
 }
 
 /// expr-chain:
@@ -749,8 +762,8 @@ ParserResult<Expr> Parser::parseExprChain() {
   auto *chainExpr = desugarChainExpr(bodyElements, range);
   assert(chainExpr != nullptr);
 
-  llvm::errs() << "Created chainExpr:\n";
-  chainExpr->dump();
+  // llvm::errs() << "Created chainExpr:\n";
+  // chainExpr->dump();
 
   return makeParserResult(status, chainExpr);
 }
@@ -1944,6 +1957,7 @@ ParserResult<Expr> Parser::parseExprPrimary(Diag<> ID, bool isExprBasic) {
 
   // Eat an invalid token in an expression context.  Error tokens are diagnosed
   // by the lexer, so there is no reason to emit another diagnostic.
+
   case tok::unknown:
     if (Tok.getText().startswith("\"\"\"")) {
       // This was due to unterminated multi-line string.
@@ -1953,6 +1967,9 @@ ParserResult<Expr> Parser::parseExprPrimary(Diag<> ID, bool isExprBasic) {
     return nullptr;
 
   default:
+    // llvm::errs() << "parseExprPrimary: ";
+    // dumpTokenKind(llvm::errs(), Tok.getKind());
+    // llvm::errs() << "\n";
   UnknownCharacter:
     checkForInputIncomplete();
     // FIXME: offer a fixit: 'Self' -> 'self'
@@ -2443,12 +2460,8 @@ ParserResult<Expr> Parser::parseExprPatternLiteral() {
       case 'd':
       case 's':
       // Other char escape codes
-      case '\\':
-      case 'n': 
-        break;
-
       default:
-        llvm::errs() << "Unknown escape char '" << *c << "'\n";
+        break; 
       }
       break;
     }

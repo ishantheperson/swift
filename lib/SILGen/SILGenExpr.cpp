@@ -2526,7 +2526,7 @@ visitPatternLiteralExpr(PatternLiteralExpr *E, SGFContext C) {
     // Inlined from TapExpr:
     // TODO: This is only necessary because constant evaluation requires that
     // the box for the var gets defined before the initializer happens.
-    auto Var = ETap->getVar();
+    auto *Var = ETap->getVar();
     auto VarType = ETap->getType()->getCanonicalType();
 
     Scope outerScope(SGF, CleanupLocation(ETap));
