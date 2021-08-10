@@ -1,4 +1,6 @@
-/// A parser which produces values of type T
+/// A parser which produces values of type T.
+/// This parser produces all possible matches,
+/// so it can deal with ambiguous expressions nicely
 struct Parser<T> {
   /// The actual parsing function.
   /// Since we may need to explore multiple possibilities,
@@ -37,6 +39,14 @@ extension Parser {
   func map<R>(_ f: @escaping (T) -> R) -> Parser<R> {
     Parser<R> { input in self.run(input).map { (v, restInput) in (f(v), restInput) } }
   }
+
+  func flatMap<R>(_ f: @escaping (T) -> Parser<R>) -> Parser<R> {
+    bind(self, f)
+  } 
+
+  func ignore() -> Parser<()> {
+    self.map { _ in () }
+  }
 }
 
 func map<T, R>(_ parser: Parser<T>, _ f: @escaping (T) -> R) -> Parser<R> {
@@ -48,15 +58,16 @@ func succeed<T>(_ value: T) -> Parser<T> {
   Parser { input in [(value, input)] }
 }
 
+func unit<T>(_ value: T) -> Parser<T> {
+  succeed(value)
+}
+
 /// A parser which always fails
 func fail<T>() -> Parser<T> {
   Parser { _ in [] }
 }
 
 /// Ignores the value returned by the parser
-func ignore<T>(_ parser: Parser<T>) -> Parser<()> {
-  parser.map { _ in () }
-}
 
 /// Succeeds iff we have reached the end of the input
 let eof: Parser<()> = Parser { input in (input.isEmpty ? succeed(()) : fail()).run(input) }
@@ -140,10 +151,10 @@ func zeroOrMore<T>(_ parser: Parser<T>) -> Parser<[T]> {
 /// The equivalent of + in regex. 
 /// Runs one or more times, and collects the results
 func oneOrMore<T>(_ parser: Parser<T>) -> Parser<[T]> {
-  return chain {
+  chain {
     let first = parser 
     let rest = zeroOrMore(parser)
-    succeed([first] + rest)
+    return [first] + rest
   }
 }
 
@@ -180,20 +191,53 @@ func atMost<T>(times: Int, _ parser: Parser<T>) -> Parser<[T]> {
 
 /// Parses a range of possible repetitions 
 func between<T>(_ lowerBound: Int, and upperBound: Int, _ parser: Parser<T>) -> Parser<[T]> {
-  assert(upperBound >= lowerBound);
+  precondition(upperBound >= lowerBound, "Upper bound must be greater than lower bound");
 
   return chain {
     let initial = exactly(times: lowerBound, parser)
     let rest = atMost(times: upperBound - lowerBound, parser)
-    succeed(initial + rest)
+    return initial + rest
+  }
+}
+
+extension Parser {
+  func skipSpaces() -> Parser<T> {
+    chain {
+      let result = self
+      takeWhile(\.isWhitespace).ignore()
+      return result 
+    }
+  }
+}
+
+extension Parser: 
+  ExpressibleByStringLiteral, 
+  ExpressibleByExtendedGraphemeClusterLiteral,
+  ExpressibleByUnicodeScalarLiteral
+  where T == String 
+{
+  typealias UnicodeScalarLiteralType = Character
+  typealias ExtendedGraphemeClusterLiteralType = Character
+  typealias StringLiteralType = String
+
+  init(unicodeScalarLiteral value: Character) {
+    self = string(String(value))
+  }
+
+  init(extendedGraphemeClusterLiteral value: ExtendedGraphemeClusterLiteralType) {
+    self = string(String(value))
+  }
+
+  init(stringLiteral value: StringLiteralType) {
+    self = string(value)
   }
 }
 
 let foo: Parser<(Int, Int)> = chain {
-  let a = zeroOrMore(char("A"))
-  let b = zeroOrMore(char("B"))
+  let a = "AAAA"
+  "BBB"
   eof
-  succeed((a.count, b.count))
+  return (a.count, 3)
 }
 
 print(foo.run(on: "AAAABBB"))
@@ -201,29 +245,13 @@ print(foo.run(on: "AAAABBB"))
 let number: Parser<Int?> = chain {
   let n: Int? = takeWhile(\.isWholeNumber).map(Int.init)
   eof
-  succeed(n)
+  return n
 }
 
 // deferences nullptr for some reason 
 // print(number.run(on: "1234"))
 
-let skipSpaces = ignore(takeWhile({ $0.isWhitespace }))
 
-let unicodeScalar: Parser<UnicodeScalar> = 
-  between(4, and: 6, satisfies({ $0.isHexDigit }))
-    .map { UnicodeScalar(UInt32(String($0), radix: 16)!)! }
-
-let unicodeData: Parser<(UnicodeScalar, UnicodeScalar?)> = chain {
-  let scalarStart = unicodeScalar
-  let scalarEnd: UnicodeScalar? = optionally(chain {
-    string("..")
-    unicodeScalar
-  })
-
-  succeed((scalarStart, scalarEnd))
-}
-
-print(unicodeData.run(on: "0600..0605 ; "))
 
 // Generic chain examples
 func bind<T, R>(_ v: [T], _ f: (T) -> [R]) -> [R] {
