@@ -55,6 +55,7 @@ TYPE_ATTR(differentiable)
 TYPE_ATTR(noDerivative)
 TYPE_ATTR(async)
 TYPE_ATTR(Sendable)
+TYPE_ATTR(unchecked)
 
 // SIL-specific attributes
 TYPE_ATTR(block_storage)
@@ -581,7 +582,7 @@ CONTEXTUAL_SIMPLE_DECL_ATTR(isolated, Isolated,
   103)
 
 SIMPLE_DECL_ATTR(globalActor, GlobalActor,
-  OnClass | OnStruct | OnEnum | ConcurrencyOnly |
+  OnClass | OnStruct | OnEnum |
   ABIStableToAdd | ABIBreakingToRemove |
   APIStableToAdd | APIBreakingToRemove,
   104)
@@ -592,7 +593,7 @@ SIMPLE_DECL_ATTR(_specializeExtension, SpecializeExtension,
   105)
 
 CONTEXTUAL_SIMPLE_DECL_ATTR(async, Async,
-  DeclModifier | OnVar | OnFunc | ConcurrencyOnly |
+  DeclModifier | OnVar | OnFunc |
   ABIBreakingToAdd | ABIBreakingToRemove |
   APIBreakingToAdd | APIBreakingToRemove,
   106)
@@ -620,11 +621,7 @@ SIMPLE_DECL_ATTR(reasync, AtReasync,
   ABIBreakingToAdd | ABIBreakingToRemove | APIBreakingToAdd | APIBreakingToRemove,
   110)
 
-DECL_ATTR(completionHandlerAsync, CompletionHandlerAsync,
-  OnAbstractFunction | ConcurrencyOnly | LongAttribute |
-  ABIStableToAdd | ABIStableToRemove |
-  APIStableToAdd | APIStableToRemove,
-  111)
+// 111 was an experimental @completionHandlerAsync and is now unused
 
 CONTEXTUAL_SIMPLE_DECL_ATTR(nonisolated, Nonisolated,
   DeclModifier | OnFunc | OnConstructor | OnVar | OnSubscript |
@@ -652,11 +649,7 @@ SIMPLE_DECL_ATTR(_inheritActorContext, InheritActorContext,
   ABIStableToAdd | ABIStableToRemove | APIBreakingToAdd | APIBreakingToRemove,
   116)
 
-CONTEXTUAL_SIMPLE_DECL_ATTR(spawn, Spawn,
-  DeclModifier | OnVar | ConcurrencyOnly |
-  ABIBreakingToAdd | ABIBreakingToRemove |
-  APIBreakingToAdd | APIBreakingToRemove,
-  117)
+// 117 was 'spawn' and is now unused
 
 CONTEXTUAL_SIMPLE_DECL_ATTR(distributed, DistributedActor,
   DeclModifier | OnClass | OnFunc |
@@ -673,9 +666,12 @@ SIMPLE_DECL_ATTR(_distributedActorIndependent, DistributedActorIndependent,
   119)
 
 SIMPLE_DECL_ATTR(_assemblyVision, EmitAssemblyVisionRemarks,
-  OnFunc | UserInaccessible | NotSerialized |
+  OnFunc | UserInaccessible | NotSerialized | OnNominalType |
   ABIStableToAdd | ABIStableToRemove | APIStableToAdd | APIStableToRemove,
   120)
+
+// If you're adding a new underscored attribute here, please document it in
+// docs/ReferenceGuides/UnderscoredAttributes.md.
 
 #undef TYPE_ATTR
 #undef DECL_ATTR_ALIAS

@@ -376,21 +376,21 @@ FuncDecl *
 SILGenModule::getAsyncLetGet() {
   return lookupConcurrencyIntrinsic(getASTContext(),
                                     AsyncLetGet,
-                                    "_asyncLetGet");
+                                    "_asyncLet_get");
 }
 
 FuncDecl *
 SILGenModule::getAsyncLetGetThrowing() {
   return lookupConcurrencyIntrinsic(getASTContext(),
                                     AsyncLetGetThrowing,
-                                    "_asyncLetGetThrowing");
+                                    "_asyncLet_get_throwing");
 }
 
 FuncDecl *
-SILGenModule::getEndAsyncLet() {
+SILGenModule::getFinishAsyncLet() {
   return lookupConcurrencyIntrinsic(getASTContext(),
                                     EndAsyncLet,
-                                    "_asyncLetEnd");
+                                    "_asyncLet_finish");
 }
 
 FuncDecl *
@@ -534,7 +534,7 @@ SILGenModule::getKeyPathProjectionCoroutine(bool isReadAccess,
                                          SubstitutionMap(),
                                          getASTContext());
 
-  auto env = sig->getGenericEnvironment();
+  auto env = sig.getGenericEnvironment();
 
   SILGenFunctionBuilder builder(*this);
   fn = builder.createFunction(SILLinkage::PublicExternal,

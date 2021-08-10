@@ -169,10 +169,6 @@ def disable_typo_correction : Flag<["-"], "disable-typo-correction">,
 def disable_implicit_swift_modules: Flag<["-"], "disable-implicit-swift-modules">,
   HelpText<"Disable building Swift modules implicitly by the compiler">;
 
-def swift_module_file
-  : Separate<["-"], "swift-module-file">, MetaVarName<"<path>">,
-    HelpText<"Specify Swift module explicitly built from textual interface">;
-
 def explict_swift_module_map
   : Separate<["-"], "explicit-swift-module-map-file">, MetaVarName<"<path>">,
     HelpText<"Specify a JSON file containing information of explict Swift modules">;
@@ -277,14 +273,12 @@ def debug_constraints_on_line_EQ : Joined<["-"], "debug-constraints-on-line=">,
 def disable_named_lazy_member_loading : Flag<["-"], "disable-named-lazy-member-loading">,
   HelpText<"Disable per-name lazy member loading">;
 
-def enable_requirement_machine : Flag<["-"], "enable-requirement-machine">,
-  HelpText<"Enable experimental generics implementation">;
-
-def disable_requirement_machine : Flag<["-"], "disable-requirement-machine">,
-  HelpText<"Disable experimental generics implementation">;
-
 def debug_requirement_machine : Flag<["-"], "debug-requirement-machine">,
   HelpText<"Enables debugging output from the generics implementation">;
+
+def analyze_requirement_machine : Flag<["-"], "analyze-requirement-machine">,
+  Flags<[FrontendOption, HelpHidden, DoesNotAffectIncrementalBuild]>,
+  HelpText<"Print out requirement machine statistics at the end of the compilation job">;
 
 def requirement_machine_step_limit : Separate<["-"], "requirement-machine-step-limit">,
   Flags<[FrontendOption, HelpHidden, DoesNotAffectIncrementalBuild]>,
@@ -436,6 +430,14 @@ def enable_sil_opaque_values : Flag<["-"], "enable-sil-opaque-values">,
 def enable_experimental_static_assert :
   Flag<["-"], "enable-experimental-static-assert">,
   HelpText<"Enable experimental #assert">;
+
+def enable_experimental_named_opaque_types :
+  Flag<["-"], "enable-experimental-named-opaque-types">,
+  HelpText<"Enable experimental support for named opaque result types">;
+
+def enable_experimental_structural_opaque_types :
+  Flag<["-"], "enable-experimental-structural-opaque-types">,
+  HelpText<"Enable experimental support for structural opaque result types">;
 
 def enable_deserialization_recovery :
   Flag<["-"], "enable-deserialization-recovery">,
@@ -641,9 +643,11 @@ def print_inst_counts : Flag<["-"], "print-inst-counts">,
   HelpText<"Before IRGen, count all the various SIL instructions. Must be used "
            "in conjunction with -print-stats.">;
 
-def debug_on_sil : Flag<["-"], "gsil">,
+def debug_on_sil : Flag<["-"], "sil-based-debuginfo">,
   HelpText<"Write the SIL into a file and generate debug-info to debug on SIL "
            " level.">;
+def legacy_gsil : Flag<["-"], "gsil">,
+  HelpText<"Deprecated, use '-sil-based-debuginfo' instead">;
 
 def print_llvm_inline_tree : Flag<["-"], "print-llvm-inline-tree">,
   HelpText<"Print the LLVM inline tree.">;
@@ -787,10 +791,6 @@ def read_legacy_type_info_path_EQ : Joined<["-"], "read-legacy-type-info-path=">
 def type_info_dump_filter_EQ : Joined<["-"], "type-info-dump-filter=">,
   Flags<[FrontendOption]>,
   HelpText<"One of 'all', 'resilient' or 'fragile'">;
-
-def emit_ldadd_cfile_path
-  : Separate<["-"], "emit-ldadd-cfile-path">, MetaVarName<"<path>">,
-    HelpText<"Generate .c file defining symbols to add back">;
 
 def previous_module_installname_map_file
   : Separate<["-"], "previous-module-installname-map-file">, MetaVarName<"<path>">,

@@ -34,9 +34,11 @@
 #include "swift/AST/PropertyWrappers.h"
 #include "swift/AST/SourceFile.h"
 #include "swift/AST/StorageImpl.h"
+#include "swift/AST/SwiftNameTranslation.h"
 #include "swift/AST/TypeCheckRequests.h"
 #include "swift/AST/Types.h"
 #include "swift/Parse/Lexer.h"
+#include "swift/Parse/Parser.h"
 #include "swift/Sema/IDETypeChecking.h"
 #include "clang/Basic/CharInfo.h"
 #include "llvm/ADT/STLExtras.h"
@@ -257,13 +259,10 @@ public:
   void visitDistributedActorIndependentAttr(DistributedActorIndependentAttr *attr);
   void visitGlobalActorAttr(GlobalActorAttr *attr);
   void visitAsyncAttr(AsyncAttr *attr);
-  void visitSpawnAttr(SpawnAttr *attr);
-  void visitAsyncOrSpawnAttr(DeclAttribute *attr);
   void visitMarkerAttr(MarkerAttr *attr);
 
   void visitReasyncAttr(ReasyncAttr *attr);
   void visitNonisolatedAttr(NonisolatedAttr *attr);
-  void visitCompletionHandlerAsyncAttr(CompletionHandlerAsyncAttr *attr);
 };
 
 } // end anonymous namespace
@@ -799,7 +798,9 @@ void AttributeChecker::visitAccessControlAttr(AccessControlAttr *attr) {
   }
 
   if (attr->getAccess() == AccessLevel::Open) {
-    if (!isa<ClassDecl>(D) && !D->isPotentiallyOverridable() &&
+    auto classDecl = dyn_cast<ClassDecl>(D);
+    if (!(classDecl && !classDecl->isActor()) &&
+        !D->isPotentiallyOverridable() &&
         !attr->isInvalid()) {
       diagnose(attr->getLocation(), diag::access_control_open_bad_decl)
         .fixItReplace(attr->getRange(), "public");
@@ -1864,7 +1865,7 @@ synthesizeMainBody(AbstractFunctionDecl *fn, void *arg) {
       /*Implicit*/ true);
   memberRefExpr->setImplicit(true);
 
-  auto *callExpr = CallExpr::createImplicit(context, memberRefExpr, {}, {});
+  auto *callExpr = CallExpr::createImplicitEmpty(context, memberRefExpr);
   callExpr->setImplicit(true);
   callExpr->setType(context.TheEmptyTupleType);
 
@@ -2085,7 +2086,8 @@ void AttributeChecker::visitRequiredAttr(RequiredAttr *attr) {
     return;
   }
   // Only classes can have required constructors.
-  if (parentTy->getClassOrBoundGenericClass()) {
+  if (parentTy->getClassOrBoundGenericClass() &&
+      !parentTy->getClassOrBoundGenericClass()->isActor()) {
     // The constructor must be declared within the class itself.
     // FIXME: Allow an SDK overlay to add a required initializer to a class
     // defined in Objective-C
@@ -2168,7 +2170,7 @@ static void checkSpecializeAttrRequirements(SpecializeAttr *attr,
 
   SmallVector<GenericTypeParamType *, 2> unspecializedParams;
 
-  for (auto *paramTy : specializedSig->getGenericParams()) {
+  for (auto *paramTy : specializedSig.getGenericParams()) {
     auto canTy = paramTy->getCanonicalType();
     if (specializedSig->isCanonicalTypeInContext(canTy) &&
         (!specializedSig->getLayoutConstraint(canTy) ||
@@ -2177,7 +2179,7 @@ static void checkSpecializeAttrRequirements(SpecializeAttr *attr,
     }
   }
 
-  unsigned expectedCount = specializedSig->getGenericParams().size();
+  unsigned expectedCount = specializedSig.getGenericParams().size();
   unsigned gotCount = expectedCount - unspecializedParams.size();
 
   if (expectedCount == gotCount)
@@ -2775,7 +2777,7 @@ TypeEraserHasViableInitRequest::evaluate(Evaluator &evaluator,
       return false;
 
     auto genericSignature = init->getGenericSignature();
-    auto genericParamType = genericSignature->getInnermostGenericParams().front();
+    auto genericParamType = genericSignature.getInnermostGenericParams().front();
 
     // Fow now, only allow one parameter.
     auto params = init->getParameters();
@@ -2801,7 +2803,7 @@ TypeEraserHasViableInitRequest::evaluate(Evaluator &evaluator,
 
     // Use invalid 'SourceLoc's to suppress diagnostics.
     auto result = TypeChecker::checkGenericArguments(
-          module, genericSignature->getRequirements(),
+          module, genericSignature.getRequirements(),
           [&](SubstitutableType *type) -> Type {
             if (type->isEqual(genericParamType))
               return protocol->getSelfTypeInContext();
@@ -3351,10 +3353,9 @@ Type TypeChecker::checkReferenceOwnershipAttr(VarDecl *var, Type type,
   if (PDC && !PDC->isObjC()) {
     // Ownership does not make sense in protocols, except for "weak" on
     // properties of Objective-C protocols.
-    auto D = var->getASTContext().isSwiftVersionAtLeast(5)
-                 ? diag::ownership_invalid_in_protocols
-                 : diag::ownership_invalid_in_protocols_compat_warning;
+    auto D = diag::ownership_invalid_in_protocols;
     Diags.diagnose(attr->getLocation(), D, ownershipKind)
+        .warnUntilSwiftVersion(5)
         .fixItRemove(attr->getRange());
     attr->setInvalid();
   }
@@ -4489,7 +4490,7 @@ IndexSubset *DifferentiableAttributeTypeCheckRequest::evaluate(
     if (diagnoseDynamicSelfResult) {
       // Diagnose class initializers in non-final classes.
       if (isa<ConstructorDecl>(original)) {
-        if (!classDecl->isFinal()) {
+        if (!classDecl->isSemanticallyFinal()) {
           diags.diagnose(
               attr->getLocation(),
               diag::differentiable_attr_nonfinal_class_init_unsupported,
@@ -4515,9 +4516,7 @@ IndexSubset *DifferentiableAttributeTypeCheckRequest::evaluate(
   if (resolveDifferentiableAttrDerivativeGenericSignature(attr, original,
                                                           derivativeGenSig))
     return nullptr;
-  GenericEnvironment *derivativeGenEnv = nullptr;
-  if (derivativeGenSig)
-    derivativeGenEnv = derivativeGenSig->getGenericEnvironment();
+  auto *derivativeGenEnv = derivativeGenSig.getGenericEnvironment();
 
   // Compute the derivative function type.
   auto originalFnRemappedTy = originalFnTy;
@@ -4790,7 +4789,7 @@ static bool typeCheckDerivativeAttr(ASTContext &Ctx, Decl *D,
     if (diagnoseDynamicSelfResult) {
       // Diagnose class initializers in non-final classes.
       if (isa<ConstructorDecl>(originalAFD)) {
-        if (!classDecl->isFinal()) {
+        if (!classDecl->isSemanticallyFinal()) {
           diags.diagnose(attr->getLocation(),
                          diag::derivative_attr_nonfinal_class_init_unsupported,
                          classDecl->getDeclaredInterfaceType());
@@ -5424,7 +5423,8 @@ void AttributeChecker::visitDistributedActorAttr(DistributedActorAttr *attr) {
       return;
     }
   } else if (dyn_cast<StructDecl>(D) || dyn_cast<EnumDecl>(D)) {
-    diagnoseAndRemoveAttr(attr, diag::distributed_actor_func_not_in_distributed_actor);
+    diagnoseAndRemoveAttr(
+        attr, diag::distributed_actor_func_not_in_distributed_actor);
     return;
   }
 
@@ -5435,19 +5435,31 @@ void AttributeChecker::visitDistributedActorAttr(DistributedActorAttr *attr) {
       return;
     }
 
+    // distributed func cannot be simultaneously nonisolated
+    if (auto nonisolated =
+            funcDecl->getAttrs().getAttribute<NonisolatedAttr>()) {
+      diagnoseAndRemoveAttr(nonisolated,
+                            diag::distributed_actor_func_nonisolated,
+                            funcDecl->getName());
+      return;
+    }
+
     // distributed func must be declared inside an distributed actor
     if (dc->getSelfClassDecl() &&
         !dc->getSelfClassDecl()->isDistributedActor()) {
-      diagnoseAndRemoveAttr(attr, diag::distributed_actor_func_not_in_distributed_actor);
+      diagnoseAndRemoveAttr(
+          attr, diag::distributed_actor_func_not_in_distributed_actor);
       return;
     } else if (auto protoDecl = dc->getSelfProtocolDecl()){
       if (!protoDecl->inheritsFromDistributedActor()) {
         // TODO: could suggest adding `: DistributedActor` to the protocol as well
-        diagnoseAndRemoveAttr(attr, diag::distributed_actor_func_not_in_distributed_actor);
+        diagnoseAndRemoveAttr(
+            attr, diag::distributed_actor_func_not_in_distributed_actor);
         return;
       }
     } else if (dc->getSelfStructDecl() || dc->getSelfEnumDecl()) {
-      diagnoseAndRemoveAttr(attr, diag::distributed_actor_func_not_in_distributed_actor);
+      diagnoseAndRemoveAttr(
+          attr, diag::distributed_actor_func_not_in_distributed_actor);
       return;
     }
   }
@@ -5457,11 +5469,27 @@ void AttributeChecker::visitNonisolatedAttr(NonisolatedAttr *attr) {
   // 'nonisolated' can be applied to global and static/class variables
   // that do not have storage.
   auto dc = D->getDeclContext();
+
   if (auto var = dyn_cast<VarDecl>(D)) {
-    // 'nonisolated' can not be applied to mutable stored properties.
-    if (var->hasStorage() && var->supportsMutation()) {
-      diagnoseAndRemoveAttr(attr, diag::nonisolated_mutable_storage);
-      return;
+    // stored properties have limitations as to when they can be nonisolated.
+    if (var->hasStorage()) {
+      auto nominal = dyn_cast<NominalTypeDecl>(dc);
+
+      // 'nonisolated' can not be applied to stored properties inside
+      // distributed actors. Attempts of nonisolated access would be
+      // cross-actor, and that means they might be accessing on a remote actor,
+      // in which case the stored property storage does not exist.
+      if (nominal && nominal->isDistributedActor()) {
+        diagnoseAndRemoveAttr(attr,
+                              diag::nonisolated_distributed_actor_storage);
+        return;
+      }
+
+      // 'nonisolated' can not be applied to mutable stored properties.
+      if (var->supportsMutation()) {
+        diagnoseAndRemoveAttr(attr, diag::nonisolated_mutable_storage);
+        return;
+      }
     }
 
     // nonisolated can not be applied to local properties.
@@ -5501,16 +5529,6 @@ void AttributeChecker::visitGlobalActorAttr(GlobalActorAttr *attr) {
 }
 
 void AttributeChecker::visitAsyncAttr(AsyncAttr *attr) {
-  if (isa<VarDecl>(D)) {
-    visitAsyncOrSpawnAttr(attr);
-  }
-}
-
-void AttributeChecker::visitSpawnAttr(SpawnAttr *attr) {
-  visitAsyncOrSpawnAttr(attr);
-}
-
-void AttributeChecker::visitAsyncOrSpawnAttr(DeclAttribute *attr) {
   auto var = dyn_cast<VarDecl>(D);
   if (!var)
     return;
@@ -5660,182 +5678,157 @@ void TypeChecker::checkClosureAttributes(ClosureExpr *closure) {
   }
 }
 
-void AttributeChecker::visitCompletionHandlerAsyncAttr(
-    CompletionHandlerAsyncAttr *attr) {
-  if (AbstractFunctionDecl *AFD = dyn_cast<AbstractFunctionDecl>(D))
-    AFD->getAsyncAlternative();
+static bool renameCouldMatch(const ValueDecl *original,
+                             const ValueDecl *candidate,
+                             bool originalIsObjCVisible,
+                             AccessLevel minAccess) {
+  // Can't match itself
+  if (original == candidate)
+    return false;
+
+  // Kinds have to match, but we want to allow eg. an accessor to match
+  // a function
+  if (candidate->getKind() != original->getKind() &&
+      !(isa<FuncDecl>(candidate) && isa<FuncDecl>(original)))
+    return false;
+
+  // Instance can't match static/class function
+  if (candidate->isInstanceMember() != original->isInstanceMember())
+    return false;
+
+  // If the original is ObjC visible then the rename must be as well
+  if (originalIsObjCVisible &&
+      !objc_translation::isVisibleToObjC(candidate, minAccess))
+    return false;
+
+  // @available is intended for public interfaces, so an implementation-only
+  // decl shouldn't match
+  if (candidate->getAttrs().hasAttribute<ImplementationOnlyAttr>())
+    return false;
+
+  return true;
 }
 
-AbstractFunctionDecl *AsyncAlternativeRequest::evaluate(
-    Evaluator &evaluator, AbstractFunctionDecl *attachedFunctionDecl) const {
-  auto attr = attachedFunctionDecl->getAttrs()
-    .getAttribute<CompletionHandlerAsyncAttr>();
-  if (!attr)
-    return nullptr;
+static bool parametersMatch(const AbstractFunctionDecl *a,
+                            const AbstractFunctionDecl *b) {
+  auto aParams = a->getParameters();
+  auto bParams = b->getParameters();
 
-  if (attr->AsyncFunctionDecl)
-    return attr->AsyncFunctionDecl;
+  if (aParams->size() != bParams->size())
+    return false;
 
-  auto &Diags = attachedFunctionDecl->getASTContext().Diags;
-  // Check phases:
-  //  1. Attached function shouldn't be async and should have enough args
-  //     to have a completion handler
-  //  2. Completion handler should be a function type that returns void.
-  //     Completion handler type should be escaping and not autoclosure
-  //  3. Find functionDecl that the attachedFunction is being mapped to
-  //      - Find all with the same name
-  //      - Keep any that are async
-  //      - Do some sanity checking on types
-
-  // Phase 1: Typecheck the function the attribute is attached to
-  if (attachedFunctionDecl->hasAsync()) {
-    Diags.diagnose(attr->getLocation(),
-                   diag::attr_completion_handler_async_handler_not_func, attr);
-    Diags.diagnose(attachedFunctionDecl->getAsyncLoc(),
-                   diag::note_attr_function_declared_async);
-    return nullptr;
+  for (auto index : indices(*aParams)) {
+    auto aParamType = aParams->get(index)->getType();
+    auto bParamType = bParams->get(index)->getType();
+    if (!aParamType->matchesParameter(bParamType, TypeMatchOptions()))
+      return false;
   }
+  return true;
+}
 
-  const ParameterList *attachedFunctionParams =
-      attachedFunctionDecl->getParameters();
-  assert(attachedFunctionParams && "Attached function has no parameter list");
-  if (attachedFunctionParams->size() == 0) {
-    Diags.diagnose(attr->getLocation(),
-                   diag::attr_completion_handler_async_handler_not_func, attr);
+ValueDecl *RenamedDeclRequest::evaluate(Evaluator &evaluator,
+                                        const ValueDecl *attached,
+                                        const AvailableAttr *attr) const {
+  if (!attached || !attr)
     return nullptr;
-  }
-  size_t completionHandlerIndex = attr->CompletionHandlerIndexLoc.isValid()
-                                      ? attr->CompletionHandlerIndex
-                                      : attachedFunctionParams->size() - 1;
-  if (attachedFunctionParams->size() < completionHandlerIndex) {
-    Diags.diagnose(attr->CompletionHandlerIndexLoc,
-                   diag::attr_completion_handler_async_handler_out_of_range);
-    return nullptr;
-  }
 
-  // Phase 2: Typecheck the completion handler
-  const ParamDecl *completionHandlerParamDecl =
-      attachedFunctionParams->get(completionHandlerIndex);
-  {
-    AnyFunctionType *handlerType =
-        completionHandlerParamDecl->getType()->getAs<AnyFunctionType>();
-    if (!handlerType) {
-      Diags.diagnose(attr->getLocation(),
-                     diag::attr_completion_handler_async_handler_not_func,
-                     attr);
-      Diags
-          .diagnose(
-              completionHandlerParamDecl->getTypeRepr()->getLoc(),
-              diag::note_attr_completion_handler_async_type_is_not_function,
-              completionHandlerParamDecl->getType())
-          .highlight(
-              completionHandlerParamDecl->getTypeRepr()->getSourceRange());
+  if (attr->RenameDecl)
+    return attr->RenameDecl;
+
+  if (attr->Rename.empty())
+    return nullptr;
+
+  auto attachedContext = attached->getDeclContext();
+  auto parsedName = parseDeclName(attr->Rename);
+  auto nameRef = parsedName.formDeclNameRef(attached->getASTContext());
+
+  // Handle types separately
+  if (isa<NominalTypeDecl>(attached)) {
+    if (!parsedName.ContextName.empty())
       return nullptr;
-    }
 
-    auto handlerTypeRepr =
-        dyn_cast<AttributedTypeRepr>(completionHandlerParamDecl->getTypeRepr());
-    const TypeAttributes *handlerTypeAttrs = nullptr;
-    if (handlerTypeRepr)
-      handlerTypeAttrs = &handlerTypeRepr->getAttrs();
-
-    const bool missingVoid = !handlerType->getResult()->isVoid();
-    const bool hasAutoclosure =
-        handlerTypeAttrs ? handlerTypeAttrs->has(TAK_autoclosure) : false;
-    const bool hasEscaping =
-        handlerTypeAttrs ? handlerTypeAttrs->has(TAK_escaping) : false;
-    const bool hasError = missingVoid | hasAutoclosure | !hasEscaping;
-
-    if (hasError) {
-      Diags.diagnose(attr->getLocation(),
-                     diag::attr_completion_handler_async_handler_not_func,
-                     attr);
-
-      if (missingVoid)
-        Diags
-            .diagnose(completionHandlerParamDecl->getLoc(),
-                      diag::note_attr_completion_function_must_return_void)
-            .highlight(
-                completionHandlerParamDecl->getTypeRepr()->getSourceRange());
-
-      if (!hasEscaping)
-        Diags
-            .diagnose(completionHandlerParamDecl->getLoc(),
-                      diag::note_attr_completion_handler_async_handler_attr_req,
-                      true, "escaping")
-            .highlight(
-                completionHandlerParamDecl->getTypeRepr()->getSourceRange());
-
-      if (hasAutoclosure)
-        Diags.diagnose(
-            handlerTypeAttrs->getLoc(TAK_autoclosure),
-            diag::note_attr_completion_handler_async_handler_attr_req, false,
-            "autoclosure");
-      return nullptr;
-    }
+    SmallVector<ValueDecl *, 1> lookupResults;
+    attachedContext->lookupQualified(attachedContext->getParentModule(),
+                                     nameRef.withoutArgumentLabels(),
+                                     NL_OnlyTypes, lookupResults);
+    if (lookupResults.size() == 1)
+      return lookupResults[0];
+    return nullptr;
   }
 
-  // Phase 3: Find mapped async function
-  {
-    // Get the list of candidates based on the name
-    // Grab all functions that are async
-    // TODO: Sanity check types -- we just use the DeclName for now
-    //  - Need a throwing decl if the completion handler takes a Result type
-    //    containing an error, or if it takes a tuple containing an optional
-    //    error.
-    //  Find a declref that works.
-    //  Get list of candidates based on the name.
-    //  The correct candidate will need to be async.
-    //
-    //  TODO: Implement the type matching stuff eventually
-    //  If the completion handler takes a single type, then we find the async
-    //  function that returns just that type. (easy case)
-    //
-    //  If the completion handler takes a result type consisting of a type and
-    //  an error, the async function should be throwing and return that type.
-    //  (easy-ish case)
-    //
-    //  If the completion handler takes an optional type and an optional Error
-    //  type, this could map to either of these two. The intent isn't clear.
-    //    - func foo() async throws -> Int
-    //    - func foo() async throws -> Int?
-    //  This case is ambiguous, so we will report an error.
-    //
-    //  If the completion handler takes multiple types, the async function
-    //  should return all of those types in a tuple
+  auto minAccess = AccessLevel::Private;
+  if (attached->getModuleContext()->isExternallyConsumed())
+    minAccess = AccessLevel::Public;
+  bool attachedIsObjcVisible =
+      objc_translation::isVisibleToObjC(attached, minAccess);
 
-    SmallVector<ValueDecl *, 2> allCandidates;
-    lookupReplacedDecl(attr->AsyncFunctionName, attr, attachedFunctionDecl,
-                       allCandidates);
-    SmallVector<AbstractFunctionDecl *, 2> candidates;
-    candidates.reserve(allCandidates.size());
-    for (ValueDecl *candidate : allCandidates) {
-      AbstractFunctionDecl *funcDecl =
-          dyn_cast<AbstractFunctionDecl>(candidate);
-      if (!funcDecl) // Only consider functions
+  SmallVector<ValueDecl *, 4> lookupResults;
+  SmallVector<AbstractFunctionDecl *, 4> asyncResults;
+  lookupReplacedDecl(nameRef, attr, attached, lookupResults);
+
+  ValueDecl *renamedDecl = nullptr;
+  auto attachedFunc = dyn_cast<AbstractFunctionDecl>(attached);
+  for (auto candidate : lookupResults) {
+    // If the name is a getter or setter, grab the underlying accessor (if any)
+    if (parsedName.IsGetter || parsedName.IsSetter) {
+      auto *VD = dyn_cast<VarDecl>(candidate);
+      if (!VD)
         continue;
-      if (!funcDecl->hasAsync()) // only consider async functions
+
+      candidate = VD->getAccessor(parsedName.IsGetter ? AccessorKind::Get :
+                                                        AccessorKind::Set);
+      if (!candidate)
         continue;
-      candidates.push_back(funcDecl);
     }
 
-    if (candidates.empty()) {
-      Diags.diagnose(attr->AsyncFunctionNameLoc,
-                     diag::attr_completion_handler_async_no_suitable_function,
-                     attr->AsyncFunctionName);
-      return nullptr;
-    } else if (candidates.size() > 1) {
-      Diags.diagnose(attr->AsyncFunctionNameLoc,
-                     diag::attr_completion_handler_async_ambiguous_function,
-                     attr, attr->AsyncFunctionName);
+    if (!renameCouldMatch(attached, candidate, attachedIsObjcVisible,
+                          minAccess))
+      continue;
 
-      for (AbstractFunctionDecl *candidate : candidates) {
-        Diags.diagnose(candidate->getLoc(), diag::decl_declared_here,
-                       candidate->getName());
+    if (auto *candidateFunc = dyn_cast<AbstractFunctionDecl>(candidate)) {
+      // Require both functions to be async/not. Async alternatives are handled
+      // below if there's no other matches
+      if (attachedFunc->hasAsync() != candidateFunc->hasAsync()) {
+        if (candidateFunc->hasAsync())
+          asyncResults.push_back(candidateFunc);
+        continue;
       }
-      return nullptr;
+
+      // Require matching parameters for functions, unless there's only a single
+      // match
+      if (lookupResults.size() > 1 &&
+          !parametersMatch(attachedFunc, candidateFunc))
+        continue;
     }
 
-    return candidates.front();
+    // Do not match if there are any duplicates
+    if (renamedDecl) {
+      renamedDecl = nullptr;
+      break;
+    }
+    renamedDecl = candidate;
   }
+
+  // Try to match up an async alternative instead (ie. one where the
+  // completion handler has been removed).
+  if (!renamedDecl && !asyncResults.empty()) {
+    for (AbstractFunctionDecl *candidate : asyncResults) {
+      Optional<unsigned> completionHandler =
+          attachedFunc->findPotentialCompletionHandlerParam(candidate);
+      if (!completionHandler)
+        continue;
+
+      // TODO: Check the result of the async function matches the parameters
+      //       of the completion handler?
+
+      // Do not match if there are any duplicates
+      if (renamedDecl) {
+        renamedDecl = nullptr;
+        break;
+      }
+      renamedDecl = candidate;
+    }
+  }
+
+  return renamedDecl;
 }

@@ -230,7 +230,7 @@ parse_operator:
       // this, because then we can produce a fixit to rewrite the && into a ,
       // if we're in a stmt-condition.
       if (Tok.getText() == "&&" &&
-          peekToken().isAny(tok::pound_available,
+          peekToken().isAny(tok::pound_available, tok::pound_unavailable,
                             tok::kw_let, tok::kw_var, tok::kw_case))
         goto done;
       
@@ -591,9 +591,9 @@ ParserResult<Expr> Parser::parseExprUnary(Diag<> Message, bool isExprBasic) {
     }
   }
 
-  return makeParserResult(
-      Status, new (Context) PrefixUnaryExpr(
-                  Operator, formUnaryArgument(Context, SubExpr.get())));
+  auto *opCall = PrefixUnaryExpr::create(
+      Context, Operator, formUnaryArgument(Context, SubExpr.get()));
+  return makeParserResult(Status, opCall);
 }
 
 // TODO: use NullablePointer<Expr>
@@ -836,21 +836,26 @@ ParserResult<Expr> Parser::parseExprKeyPath() {
   if (rootResult.isNull() && pathResult.isNull())
     return nullptr;
 
-  auto keypath =
-      new (Context) KeyPathExpr(backslashLoc, rootResult.getPtrOrNull(),
-                                pathResult.getPtrOrNull(), hasLeadingDot);
-
   // Handle code completion.
   if ((Tok.is(tok::code_complete) && !Tok.isAtStartOfLine()) ||
       (Tok.is(tok::period) && peekToken().isAny(tok::code_complete))) {
     SourceLoc DotLoc;
     consumeIf(tok::period, DotLoc);
+
+    // Add the code completion expression to the path result.
+    CodeCompletionExpr *CC = new (Context)
+        CodeCompletionExpr(pathResult.getPtrOrNull(), Tok.getLoc());
+    auto keypath = new (Context)
+        KeyPathExpr(backslashLoc, rootResult.getPtrOrNull(), CC, hasLeadingDot);
     if (CodeCompletion)
       CodeCompletion->completeExprKeyPath(keypath, DotLoc);
     consumeToken(tok::code_complete);
     return makeParserCodeCompletionResult(keypath);
   }
 
+  auto keypath =
+      new (Context) KeyPathExpr(backslashLoc, rootResult.getPtrOrNull(),
+                                pathResult.getPtrOrNull(), hasLeadingDot);
   return makeParserResult(parseStatus, keypath);
 }
 
@@ -1347,6 +1352,19 @@ Parser::parseExprPostfixSuffix(ParserResult<Expr> Result, bool isExprBasic,
           CodeCompletion->completeDotExpr(CCExpr, /*DotLoc=*/TokLoc);
         }
         consumeToken(tok::code_complete);
+
+        // Parse and discard remaining suffixes.
+        // e.g.
+        //   closureReceiver {
+        //     baseExpr.<complete> { $0 }
+        //   }
+        // In this case, we want to consume the trailing closure because
+        // otherwise it will get parsed as a get-set clause on a variable
+        // declared by `baseExpr.<complete>` which is complete garbage.
+        bool hasBindOptional = false;
+        parseExprPostfixSuffix(makeParserResult(CCExpr), isExprBasic,
+                               periodHasKeyPathBehavior, hasBindOptional);
+
         return makeParserCodeCompletionResult(CCExpr);
       }
 
@@ -1370,13 +1388,17 @@ Parser::parseExprPostfixSuffix(ParserResult<Expr> Result, bool isExprBasic,
         SmallVector<TypeRepr *, 8> args;
         SourceLoc LAngleLoc, RAngleLoc;
         auto argStat = parseGenericArguments(args, LAngleLoc, RAngleLoc);
+        Result = makeParserResult(Result | argStat, Result.getPtrOrNull());
         if (argStat.isErrorOrHasCompletion())
           diagnose(LAngleLoc, diag::while_parsing_as_left_angle_bracket);
 
         SyntaxContext->createNodeInPlace(SyntaxKind::SpecializeExpr);
-        Result = makeParserResult(
-            Result, UnresolvedSpecializeExpr::create(
-                        Context, Result.get(), LAngleLoc, args, RAngleLoc));
+        // The result can be empty in error cases.
+        if (!args.empty()) {
+          Result = makeParserResult(
+              Result, UnresolvedSpecializeExpr::create(
+                          Context, Result.get(), LAngleLoc, args, RAngleLoc));
+        }
       }
 
       continue;
@@ -1478,9 +1500,9 @@ Parser::parseExprPostfixSuffix(ParserResult<Expr> Result, bool isExprBasic,
 
       Expr *oper = parseExprOperator();
 
-      Result = makeParserResult(
-          Result, new (Context) PostfixUnaryExpr(
-                      oper, formUnaryArgument(Context, Result.get())));
+      auto *opCall = PostfixUnaryExpr::create(
+          Context, oper, formUnaryArgument(Context, Result.get()));
+      Result = makeParserResult(Result, opCall);
       SyntaxContext->createNodeInPlace(SyntaxKind::PostfixUnaryExpr);
       continue;
     }
@@ -1908,10 +1930,12 @@ ParserResult<Expr> Parser::parseExprPrimary(Diag<> ID, bool isExprBasic) {
   case tok::l_square:
     return parseExprCollection();
 
-  case tok::pound_available: {
-    // For better error recovery, parse but reject #available in an expr
+  case tok::pound_available:
+  case tok::pound_unavailable: {
+    // For better error recovery, parse but reject availability in an expr
     // context.
-    diagnose(Tok.getLoc(), diag::availability_query_outside_if_stmt_guard);
+    diagnose(Tok.getLoc(), diag::availability_query_outside_if_stmt_guard, 
+             Tok.getText());
     auto res = parseStmtConditionPoundAvailable();
     if (res.hasCodeCompletion())
       return makeParserCodeCompletionStatus();

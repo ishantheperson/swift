@@ -622,7 +622,6 @@ func rdar_50467583_and_50909555() {
     // expected-note@-2 {{found candidate with type '(Int) -> Int'}}
     // expected-note@-3 {{found candidate with type '(Range<Int>) -> ArraySlice<Int>'}}
     // expected-note@-4 {{found candidate with type '((UnboundedRange_) -> ()) -> ArraySlice<Int>'}}
-    // expected-note@-5 {{found candidate with type '(Range<Array<Int>.Index>) -> Slice<[Int]>' (aka '(Range<Int>) -> Slice<Array<Int>>')}}
   }
   
   // rdar://problem/50909555
@@ -733,5 +732,16 @@ func rdar55369704() {
 
   func test(x: Int, s: S) {
     _ = x - Int(s.value) // expected-error {{value of type 'S' has no member 'value'}}
+  }
+}
+
+// SR-14533
+struct SR14533 {
+  var xs: [Int] 
+}
+
+func fSR14533(_ s: SR14533) {
+  for (x1, x2) in zip(s.xs, s.ys) {
+    // expected-error@-1{{value of type 'SR14533' has no member 'ys'}}
   }
 }

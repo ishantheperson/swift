@@ -13,13 +13,23 @@
 import Swift
 @_implementationOnly import _SwiftConcurrencyShims
 
+@available(SwiftStdlib 5.5, *)
+@_silgen_name("swift_job_run")
+@usableFromInline
+internal func _swiftJobRun(_ job: UnownedJob,
+                           _ executor: UnownedSerialExecutor) -> ()
+
 /// A job is a unit of scheduleable work.
 @available(SwiftStdlib 5.5, *)
 @frozen
 public struct UnownedJob {
   private var context: Builtin.Job
 
-  public func run() { }
+  @_alwaysEmitIntoClient
+  @inlinable
+  public func _runSynchronously(on executor: UnownedSerialExecutor) {
+      _swiftJobRun(self, executor)
+  }
 }
 
 @available(SwiftStdlib 5.5, *)
@@ -218,4 +228,11 @@ public func withUnsafeThrowingContinuation<T>(
   return try await Builtin.withUnsafeThrowingContinuation {
     fn(UnsafeContinuation<T, Error>($0))
   }
+}
+
+/// A hack to mark an SDK that supports swift_continuation_await.
+@available(SwiftStdlib 5.5, *)
+@_alwaysEmitIntoClient
+public func _abiEnableAwaitContinuation() {
+  fatalError("never use this function")
 }

@@ -468,9 +468,7 @@ std::string LinkEntity::mangleAsString() const {
 
   case Kind::AsyncFunctionPointerAST: {
     std::string Result;
-    Result =
-        SILDeclRef(const_cast<ValueDecl *>(getDecl()), SILDeclRef::Kind::Func)
-            .mangle();
+    Result = SILDeclRef(const_cast<ValueDecl *>(getDecl())).mangle();
     Result.append("Tu");
     return Result;
   }
@@ -758,7 +756,7 @@ SILLinkage LinkEntity::getLinkage(ForDefinition_t forDefinition) const {
   case Kind::DispatchThunkAllocatorAsyncFunctionPointer:
   case Kind::PartialApplyForwarderAsyncFunctionPointer:
     return getUnderlyingEntityForAsyncFunctionPointer()
-        .getLinkage(ForDefinition);
+        .getLinkage(forDefinition);
   case Kind::KnownAsyncFunctionPointer:
     return SILLinkage::PublicExternal;
   case Kind::PartialApplyForwarder:

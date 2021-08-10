@@ -463,7 +463,7 @@ static bool noteFixableMismatchedTypes(ValueDecl *decl, const ValueDecl *base) {
     // input arguments.
     auto *fnType = baseTy->getAs<AnyFunctionType>();
     baseTy = fnType->getResult();
-    Type argTy = FunctionType::composeInput(
+    Type argTy = FunctionType::composeTuple(
         ctx, baseTy->getAs<AnyFunctionType>()->getParams(), false);
     auto diagKind = diag::override_type_mismatch_with_fixits_init;
     unsigned numArgs = baseInit->getParameters()->size();
@@ -1028,7 +1028,7 @@ static void checkOverrideAccessControl(ValueDecl *baseDecl, ValueDecl *decl,
   } else if (baseHasOpenAccess &&
              classDecl->hasOpenAccess(dc) &&
              decl->getFormalAccess() < AccessLevel::Public &&
-             !decl->isFinal()) {
+             !decl->isSemanticallyFinal()) {
     {
       auto diag = diags.diagnose(decl, diag::override_not_accessible,
                                  /*setter*/false,
@@ -1150,7 +1150,7 @@ bool OverrideMatcher::checkOverride(ValueDecl *baseDecl,
   if (decl->getASTContext().isSwiftVersionAtLeast(5) &&
       baseDecl->getInterfaceType()->hasDynamicSelfType() &&
       !decl->getInterfaceType()->hasDynamicSelfType() &&
-      !classDecl->isFinal()) {
+      !classDecl->isSemanticallyFinal()) {
     diags.diagnose(decl, diag::override_dynamic_self_mismatch);
     diags.diagnose(baseDecl, diag::overridden_here);
   }
@@ -1448,7 +1448,6 @@ namespace  {
     UNINTERESTING_ATTR(Exported)
     UNINTERESTING_ATTR(ForbidSerializingReference)
     UNINTERESTING_ATTR(GKInspectable)
-    UNINTERESTING_ATTR(CompletionHandlerAsync)
     UNINTERESTING_ATTR(HasMissingDesignatedInitializers)
     UNINTERESTING_ATTR(IBAction)
     UNINTERESTING_ATTR(IBDesignable)
@@ -1538,7 +1537,6 @@ namespace  {
     UNINTERESTING_ATTR(DistributedActorIndependent)
     UNINTERESTING_ATTR(GlobalActor)
     UNINTERESTING_ATTR(Async)
-    UNINTERESTING_ATTR(Spawn)
     UNINTERESTING_ATTR(Sendable)
 
     UNINTERESTING_ATTR(AtRethrows)
@@ -1942,7 +1940,7 @@ static bool checkSingleOverride(ValueDecl *override, ValueDecl *base) {
   }
 
   // The overridden declaration cannot be 'final'.
-  if (base->isFinal() && !isAccessor) {
+  if (base->isSemanticallyFinal() && !isAccessor) {
     // Use a special diagnostic for overriding an actor's unownedExecutor
     // method.  TODO: only if it's implicit?  But then we need to
     // propagate implicitness in module interfaces.

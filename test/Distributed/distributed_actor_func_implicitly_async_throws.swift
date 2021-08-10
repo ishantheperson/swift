@@ -1,4 +1,4 @@
-// RUN: %target-typecheck-verify-swift -enable-experimental-distributed
+// RUN: %target-typecheck-verify-swift -enable-experimental-distributed -disable-availability-checking
 // REQUIRES: concurrency
 // REQUIRES: distributed
 
@@ -89,7 +89,7 @@ func test_outside(distributed: D) async throws {
   try await distributed.distHelloAsyncThrows() // ok
 
   // special: the actorAddress may always be referred to
-  _ = distributed.actorAddress // ok
+  _ = distributed.id // ok
   _ = distributed.actorTransport // ok
 }
 

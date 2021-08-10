@@ -1,5 +1,9 @@
-// RUN: %target-typecheck-verify-swift -enable-experimental-concurrency -warn-concurrency
+// RUN: %empty-directory(%t)
+// RUN: %target-swift-frontend -emit-module -emit-module-path %t/OtherActors.swiftmodule -module-name OtherActors %S/Inputs/OtherActors.swift -disable-availability-checking
+// RUN: %target-typecheck-verify-swift -I %t  -disable-availability-checking -warn-concurrency
 // REQUIRES: concurrency
+
+import OtherActors
 
 let immutableGlobal: String = "hello"
 var mutableGlobal: String = "can't touch this" // expected-note 5{{var declared here}}
@@ -67,7 +71,7 @@ actor MyActor: MySuperActor { // expected-error{{actor types do not support inhe
     return self.name // expected-error{{property 'name' isolated to global actor 'MainActor' can not be referenced from actor 'MyActor' in a synchronous context}}
   }
 
-  class func synchronousClass() { }
+  static func synchronousClass() { }
   static func synchronousStatic() { }
 
   func synchronous() -> String { text.first ?? "nothing" } // expected-note 9{{calls to instance method 'synchronous()' from outside of its actor context are implicitly asynchronous}}
@@ -783,12 +787,12 @@ class SomeClassWithInits {
   func hasDetached() {
     Task.detached {
       // okay
-      await self.isolated() // expected-warning{{cannot use parameter 'self' with a non-sendable type 'SomeClassWithInits' from concurrently-executed code}}
-      self.isolated() // expected-warning{{cannot use parameter 'self' with a non-sendable type 'SomeClassWithInits' from concurrently-executed code}}
+      await self.isolated()
+      self.isolated()
       // expected-error@-1{{expression is 'async' but is not marked with 'await'}}{{7-7=await }}
       // expected-note@-2{{calls to instance method 'isolated()' from outside of its actor context are implicitly asynchronous}}
 
-      print(await self.mutableState) // expected-warning{{cannot use parameter 'self' with a non-sendable type 'SomeClassWithInits' from concurrently-executed code}}
+      print(await self.mutableState)
     }
   }
 }
@@ -799,6 +803,21 @@ func outsideSomeClassWithInits() { // expected-note 3 {{add '@MainActor' to make
   _ = SomeClassWithInits.shared // expected-error{{static property 'shared' isolated to global actor 'MainActor' can not be referenced from this synchronous context}}
   SomeClassWithInits.staticIsolated() // expected-error{{call to main actor-isolated static method 'staticIsolated()' in a synchronous nonisolated context}}
 }
+
+// ----------------------------------------------------------------------
+// nonisolated let and cross-module let
+// ----------------------------------------------------------------------
+func testCrossModuleLets(actor: OtherModuleActor) async {
+  _ = actor.a         // expected-error{{expression is 'async' but is not marked with 'await'}}
+  // expected-note@-1{{property access is 'async'}}
+  _ = await actor.a   // okay
+  _ = actor.b         // okay
+  _ = actor.c // expected-error{{expression is 'async' but is not marked with 'await'}}
+  // expected-note@-1{{property access is 'async'}}
+  // expected-warning@-2{{cannot use property 'c' with a non-sendable type 'SomeClass' across actors}}
+  _ = await actor.c // expected-warning{{cannot use property 'c' with a non-sendable type 'SomeClass' across actors}}
+}
+
 
 // ----------------------------------------------------------------------
 // Actor protocols.
@@ -835,6 +854,29 @@ actor MyActorP: P {
 }
 
 @available(SwiftStdlib 5.5, *)
+protocol SP {
+  static func s()
+}
+
+@available(SwiftStdlib 5.5, *)
+actor ASP: SP {
+  static func s() { }
+}
+
+@available(SwiftStdlib 5.5, *)
+protocol SPD {
+  static func sd()
+}
+@available(SwiftStdlib 5.5, *)
+extension SPD {
+  static func sd() { }
+}
+
+@available(SwiftStdlib 5.5, *)
+actor ASPD: SPD {
+}
+
+@available(SwiftStdlib 5.5, *)
 func testCrossActorProtocol<T: P>(t: T) async {
   await t.f()
   await t.g()
@@ -844,6 +886,8 @@ func testCrossActorProtocol<T: P>(t: T) async {
   t.g()
   // expected-error@-1{{expression is 'async' but is not marked with 'await'}}{{3-3=await }}
   // expected-note@-2{{calls to instance method 'g()' from outside of its actor context are implicitly asynchronous}}
+  ASP.s()
+  ASPD.sd()
 }
 
 // ----------------------------------------------------------------------
@@ -921,3 +965,18 @@ actor Counter {
     return counter
   }
 }
+
+/// Superclass checks for global actor-qualified class types.
+class C2 { }
+
+@SomeGlobalActor
+class C3: C2 { } // it's okay to add a global actor to a nonisolated class.
+
+@GenericGlobalActor<U>
+class GenericSuper<U> { }
+
+@GenericGlobalActor<[T]>
+class GenericSub1<T>: GenericSuper<[T]> { }
+
+@GenericGlobalActor<T>
+class GenericSub2<T>: GenericSuper<[T]> { } // expected-error{{global actor 'GenericGlobalActor<T>'-isolated class 'GenericSub2' has different actor isolation from global actor 'GenericGlobalActor<U>'-isolated superclass 'GenericSuper'}}

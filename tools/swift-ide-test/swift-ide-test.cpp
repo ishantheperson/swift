@@ -757,11 +757,20 @@ static llvm::cl::opt<bool>
 EnableExperimentalConcurrency("enable-experimental-concurrency",
                               llvm::cl::desc("Enable experimental concurrency model"),
                               llvm::cl::init(false));
+static llvm::cl::opt<bool>
+WarnConcurrency("warn-concurrency",
+                llvm::cl::desc("Additional concurrency warnings"),
+                llvm::cl::init(false));
 
 static llvm::cl::opt<bool>
 DisableImplicitConcurrencyImport("disable-implicit-concurrency-module-import",
                                  llvm::cl::desc("Disable implicit import of _Concurrency module"),
                                  llvm::cl::init(false));
+
+static llvm::cl::opt<bool> EnableExperimentalNamedOpaqueTypes(
+    "enable-experimental-named-opaque-types",
+    llvm::cl::desc("Enable experimental support for named opaque result types"),
+    llvm::cl::Hidden, llvm::cl::cat(Category), llvm::cl::init(false));
 
 static llvm::cl::opt<bool>
 EnableExperimentalDistributed("enable-experimental-distributed",
@@ -3859,8 +3868,14 @@ int main(int argc, char *argv[]) {
   if (options::EnableExperimentalConcurrency) {
     InitInvok.getLangOptions().EnableExperimentalConcurrency = true;
   }
+  if (options::WarnConcurrency) {
+    InitInvok.getLangOptions().WarnConcurrency = true;
+  }
   if (options::DisableImplicitConcurrencyImport) {
     InitInvok.getLangOptions().DisableImplicitConcurrencyModuleImport = true;
+  }
+  if (options::EnableExperimentalNamedOpaqueTypes) {
+    InitInvok.getLangOptions().EnableExperimentalNamedOpaqueTypes = true;
   }
 
   if (options::EnableExperimentalDistributed) {

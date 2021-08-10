@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.12.4)
+cmake_minimum_required(VERSION 3.19.6)
 
 # TODO: Fix RPATH usage to be CMP0068 compliant
 # Disable Policy CMP0068 for CMake 3.9
@@ -159,7 +159,7 @@ set(SWIFT_ANALYZE_CODE_COVERAGE FALSE CACHE STRING
 # SWIFT_VERSION is deliberately /not/ cached so that an existing build directory
 # can be reused when a new version of Swift comes out (assuming the user hasn't
 # manually set it as part of their own CMake configuration).
-set(SWIFT_VERSION "5.5")
+set(SWIFT_VERSION "5.6")
 
 set(SWIFT_VENDOR "" CACHE STRING
     "The vendor name of the Swift compiler")
@@ -183,7 +183,7 @@ endif()
 set(SWIFT_USE_LINKER ${SWIFT_USE_LINKER_default} CACHE STRING
     "Build Swift with a non-default linker")
 
-option(SWIFT_DISABLE_DEAD_STRIPPING 
+option(SWIFT_DISABLE_DEAD_STRIPPING
       "Turn off Darwin-specific dead stripping for Swift host tools." FALSE)
 
 set(SWIFT_TOOLS_ENABLE_LTO OFF CACHE STRING "Build Swift tools with LTO. One
@@ -191,9 +191,10 @@ set(SWIFT_TOOLS_ENABLE_LTO OFF CACHE STRING "Build Swift tools with LTO. One
     option only affects the tools that run on the host (the compiler), and has
     no effect on the target libraries (the standard library and the runtime).")
 
-option(SWIFT_TOOLS_ENABLE_LIBSWIFT
-  "Enable building libswift and linking libswift into the compiler itself."
-  FALSE)
+# NOTE: We do not currently support building libswift with the Xcode generator.
+cmake_dependent_option(SWIFT_TOOLS_ENABLE_LIBSWIFT
+  "Enable building libswift and linking libswift into the compiler itself." FALSE
+  "NOT CMAKE_GENERATOR STREQUAL \"Xcode\"" FALSE)
 
 # The following only works with the Ninja generator in CMake >= 3.0.
 set(SWIFT_PARALLEL_LINK_JOBS "" CACHE STRING
@@ -247,6 +248,10 @@ option(SWIFT_STDLIB_ASSERTIONS
 
 option(SWIFT_BUILD_RUNTIME_WITH_HOST_COMPILER
        "Use the host compiler and not the internal clang to build the swift runtime"
+       FALSE)
+
+option(SWIFT_RUN_TESTS_WITH_HOST_COMPILER
+       "Run tests against the host compiler and not the just built swift"
        FALSE)
 
 set(SWIFT_SDKS "" CACHE STRING
@@ -374,7 +379,7 @@ option(SWIFT_RUNTIME_CLOBBER_FREED_OBJECTS
     "${SWIFT_RUNTIME_CLOBBER_FREED_OBJECTS_default}")
 
 option(SWIFT_STDLIB_SIL_DEBUGGING
-    "Compile the Swift standard library with -gsil to enable debugging and profiling on SIL level"
+    "Compile the Swift standard library with -sil-based-debuginfo to enable debugging and profiling on SIL level"
     FALSE)
 
 option(SWIFT_CHECK_INCREMENTAL_COMPILATION
@@ -480,7 +485,9 @@ endif()
 
 set(SWIFT_BUILD_HOST_DISPATCH FALSE)
 if(SWIFT_ENABLE_DISPATCH AND NOT CMAKE_SYSTEM_NAME STREQUAL Darwin)
-  if(SWIFT_BUILD_SYNTAXPARSERLIB OR SWIFT_BUILD_SOURCEKIT)
+  # Only build libdispatch for the host if the host tools are being built and
+  # specifically if these two libraries that depend on it are built.
+  if(SWIFT_INCLUDE_TOOLS AND (SWIFT_BUILD_SYNTAXPARSERLIB OR SWIFT_BUILD_SOURCEKIT))
     set(SWIFT_BUILD_HOST_DISPATCH TRUE)
   endif()
 
@@ -507,6 +514,11 @@ execute_process(COMMAND ${CMAKE_MAKE_PROGRAM} --version
 message(STATUS "CMake Make Program (${CMAKE_MAKE_PROGRAM}) Version: ${_CMAKE_MAKE_PROGRAM_VERSION}")
 message(STATUS "C Compiler (${CMAKE_C_COMPILER}) Version: ${CMAKE_C_COMPILER_VERSION}")
 message(STATUS "C++ Compiler (${CMAKE_CXX_COMPILER}) Version: ${CMAKE_CXX_COMPILER_VERSION}")
+if (CMAKE_Swift_COMPILER)
+  message(STATUS "Swift Compiler (${CMAKE_Swift_COMPILER}) Version: ${CMAKE_Swift_COMPILER_VERSION}")
+else()
+  message(STATUS "Swift Compiler (None).")
+endif()
 if(SWIFT_PATH_TO_CMARK_BUILD)
   execute_process(COMMAND ${SWIFT_PATH_TO_CMARK_BUILD}/src/cmark --version
     OUTPUT_VARIABLE _CMARK_VERSION
@@ -521,6 +533,13 @@ if("${SWIFT_NATIVE_CLANG_TOOLS_PATH}" STREQUAL "")
   set(SWIFT_PREBUILT_CLANG FALSE)
 else()
   set(SWIFT_PREBUILT_CLANG TRUE)
+endif()
+
+# Also mark if we have a prebuilt swift before we do anything.
+if("${SWIFT_NATIVE_SWIFT_TOOLS_PATH}" STREQUAL "")
+  set(SWIFT_PREBUILT_SWIFT FALSE)
+else()
+  set(SWIFT_PREBUILT_SWIFT TRUE)
 endif()
 
 include(SwiftSharedCMakeConfig)
@@ -1044,9 +1063,7 @@ if(SWIFT_INCLUDE_TOOLS)
   # which is used in add_swift_host_tool for the lldb workaround.
   #
   # NOTE: We do not currently support libswift with the Xcode generator.
-  if (NOT CMAKE_GENERATOR STREQUAL "Xcode")
-    add_subdirectory(libswift)
-  endif()
+  add_subdirectory(libswift)
 
   # Always include this after including stdlib/!
   # Refer to the large comment above the add_subdirectory(stdlib) call.

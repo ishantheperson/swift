@@ -623,6 +623,15 @@ IRGenModule::IRGenModule(IRGenerator &irgen,
   SwiftAsyncLetPtrTy = Int8PtrTy; // we pass it opaquely (AsyncLet*)
   SwiftTaskOptionRecordPtrTy = SizeTy; // Builtin.RawPointer? that we get as (TaskOptionRecord*)
   SwiftTaskGroupPtrTy = Int8PtrTy; // we pass it opaquely (TaskGroup*)
+  SwiftTaskOptionRecordTy = createStructType(*this, "swift.task_option", {
+    SizeTy,                     // Flags
+    SwiftTaskOptionRecordPtrTy, // Parent
+  });
+  SwiftTaskGroupTaskOptionRecordTy = createStructType(
+      *this, "swift.task_group_task_option", {
+    SwiftTaskOptionRecordTy,    // Base option record
+    SwiftTaskGroupPtrTy,        // Task group
+  });
   ExecutorFirstTy = SizeTy;
   ExecutorSecondTy = SizeTy;
   SwiftExecutorTy = createStructType(*this, "swift.executor", {
@@ -784,6 +793,26 @@ namespace RuntimeConstants {
     }
     return RuntimeAvailability::AlwaysAvailable;
   }
+
+  RuntimeAvailability
+  MultiPayloadEnumTagSinglePayloadAvailability(ASTContext &context) {
+    auto featureAvailability = context.getMultiPayloadEnumTagSinglePayload();
+    if (!isDeploymentAvailabilityContainedIn(context, featureAvailability)) {
+      return RuntimeAvailability::ConditionallyAvailable;
+    }
+    return RuntimeAvailability::AlwaysAvailable;
+  }
+
+  RuntimeAvailability
+  ObjCIsUniquelyReferencedAvailability(ASTContext &context) {
+    auto featureAvailability =
+        context.getObjCIsUniquelyReferencedAvailability();
+    if (!isDeploymentAvailabilityContainedIn(context, featureAvailability)) {
+      return RuntimeAvailability::ConditionallyAvailable;
+    }
+    return RuntimeAvailability::AlwaysAvailable;
+  }
+
 } // namespace RuntimeConstants
 
 // We don't use enough attributes to justify generalizing the
@@ -1670,7 +1699,7 @@ bool IRGenModule::useDllStorage() { return ::useDllStorage(Triple); }
 
 bool IRGenModule::shouldPrespecializeGenericMetadata() {
   auto canPrespecializeTarget =
-      (Triple.isOSDarwin() || Triple.isTvOS() ||
+      (Triple.isOSDarwin() ||
        (Triple.isOSLinux() && !(Triple.isARM() && Triple.isArch32Bit())));
   if (canPrespecializeTarget && isStandardLibrary()) {
     return true;

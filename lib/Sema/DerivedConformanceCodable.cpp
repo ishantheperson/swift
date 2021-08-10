@@ -137,8 +137,9 @@ addImplicitCodingKeys(NominalTypeDecl *target,
   // enum cases based on those var names.
   auto *codingKeyProto = C.getProtocol(KnownProtocolKind::CodingKey);
   auto codingKeyType = codingKeyProto->getDeclaredInterfaceType();
-  TypeLoc protoTypeLoc[1] = {TypeLoc::withoutLoc(codingKeyType)};
-  ArrayRef<TypeLoc> inherited = C.AllocateCopy(protoTypeLoc);
+  InheritedEntry protoTypeLoc[1] = {
+    InheritedEntry(TypeLoc::withoutLoc(codingKeyType))};
+  ArrayRef<InheritedEntry> inherited = C.AllocateCopy(protoTypeLoc);
 
   auto *enumDecl = new (C) EnumDecl(SourceLoc(), codingKeysEnumIdentifier,
                                     SourceLoc(), inherited, nullptr, target);
@@ -459,6 +460,15 @@ static bool validateCaseCodingKeysEnum(const DerivedConformance &derived,
                           ? addImplicitCaseCodingKeys(
                               enumDecl, elementDecl, codingKeysEnum)
                           : caseCodingKeysDecls.front();
+
+  if (!result) {
+    // There is no coding key defined for this element,
+    // which is okay, because not all elements have to
+    // be considered for serialization. Attempts to
+    // en-/decode them will be handled at runtime.
+    return true;
+  }
+
   auto *codingKeysTypeDecl = dyn_cast<TypeDecl>(result);
   if (!codingKeysTypeDecl) {
     result->diagnose(diag::codable_codingkeys_type_is_not_an_enum_here,
@@ -625,7 +635,7 @@ static ThrowStmt *createThrowCodingErrorStmt(ASTContext &C, Expr *containerExpr,
   assert(contextDecl && "Missing Context decl.");
 
   auto *debugMessageExpr = new (C) StringLiteralExpr(
-      StringRef("Invalid number of keys found, expected one."), SourceRange(),
+      C.AllocateCopy(debugMessage), SourceRange(),
       /* Implicit */ true);
 
   auto *contextTypeExpr =
@@ -846,8 +856,8 @@ deriveBodyEncodable_encode(AbstractFunctionDecl *encodeDecl, void *) {
     auto *method = UnresolvedDeclRefExpr::createImplicit(C, C.Id_superEncoder);
 
     // container.superEncoder()
-    auto *superEncoderRef = new (C) DotSyntaxCallExpr(containerExpr,
-                                                      SourceLoc(), method);
+    auto *superEncoderRef =
+        DotSyntaxCallExpr::create(C, containerExpr, SourceLoc(), method);
 
     // encode(to:) expr
     auto *encodeDeclRef = new (C) DeclRefExpr(ConcreteDeclRef(encodeDecl),
@@ -858,8 +868,8 @@ deriveBodyEncodable_encode(AbstractFunctionDecl *encodeDecl, void *) {
                                           SourceLoc(), /*Implicit=*/true);
 
     // super.encode(to:)
-    auto *encodeCall = new (C) DotSyntaxCallExpr(superRef, SourceLoc(),
-                                                 encodeDeclRef);
+    auto *encodeCall =
+        DotSyntaxCallExpr::create(C, superRef, SourceLoc(), encodeDeclRef);
 
     // super.encode(to: container.superEncoder())
     Expr *args[1] = {superEncoderRef};
@@ -1069,14 +1079,14 @@ deriveBodyEncodable_enum_encode(AbstractFunctionDecl *encodeDecl, void *) {
           // This case should not be encodable, so throw an error if an attempt
           // is made to encode it
           auto debugMessage =
-              "Case '" + elt->getBaseIdentifier().str() +
-              "' cannot be decoded because it is not defined in CodingKeys.";
+              "Case '" + elt->getBaseIdentifier().str().str() +
+              "' cannot be encoded because it is not defined in CodingKeys.";
           auto *selfRefExpr = new (C) DeclRefExpr(
               ConcreteDeclRef(selfRef), DeclNameLoc(), /* Implicit */ true);
 
           auto *throwStmt = createThrowCodingErrorStmt(
               C, containerExpr, C.getEncodingErrorDecl(), C.Id_invalidValue,
-              selfRefExpr, debugMessage.str());
+              selfRefExpr, debugMessage);
 
           caseStatements.push_back(throwStmt);
         } else {
@@ -1421,8 +1431,7 @@ deriveBodyDecodable_init(AbstractFunctionDecl *initDecl, void *) {
 
         // container.superDecoder()
         auto *superDecoderCall =
-          CallExpr::createImplicit(C, superDecoderRef, ArrayRef<Expr *>(),
-                                   ArrayRef<Identifier>());
+            CallExpr::createImplicitEmpty(C, superDecoderRef);
 
         // super
         auto *superRef = new (C) SuperRefExpr(initDecl->getImplicitSelfDecl(),
@@ -1467,9 +1476,7 @@ deriveBodyDecodable_init(AbstractFunctionDecl *initDecl, void *) {
         auto *superInitRef = UnresolvedDotExpr::createImplicit(C, superRef,
                                                                initName);
         // super.init() call
-        Expr *callExpr = CallExpr::createImplicit(C, superInitRef,
-                                                  ArrayRef<Expr *>(),
-                                                  ArrayRef<Identifier>());
+        Expr *callExpr = CallExpr::createImplicitEmpty(C, superInitRef);
 
         // If super.init throws, try super.init()
         if (superInitDecl->hasThrows())
@@ -1789,7 +1796,7 @@ static ValueDecl *deriveDecodable_init(DerivedConformance &derived) {
   }
 
   // This constructor should be marked as `required` for non-final classes.
-  if (classDecl && !classDecl->isFinal()) {
+  if (classDecl && !classDecl->isSemanticallyFinal()) {
     auto *reqAttr = new (C) RequiredAttr(/*IsImplicit=*/true);
     initDecl->getAttrs().add(reqAttr);
   }

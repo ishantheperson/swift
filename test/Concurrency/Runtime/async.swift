@@ -1,14 +1,10 @@
-// RUN: %target-run-simple-swift(-Xfrontend -enable-experimental-concurrency %import-libdispatch)
+// RUN: %target-run-simple-swift( -Xfrontend -disable-availability-checking %import-libdispatch)
 
 // REQUIRES: executable_test
 // REQUIRES: concurrency
 // REQUIRES: libdispatch
 
-// rdar://76038845
 // UNSUPPORTED: use_os_stdlib
-
-// rdar://79670222 : This test fails on iphonesimulator-x86_64
-// UNSUPPORTED: OS=ios && CPU=x86_64
 
 import Dispatch
 import StdlibUnittest

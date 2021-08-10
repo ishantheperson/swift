@@ -8,7 +8,7 @@
 // UNSUPPORTED: use_os_stdlib
 // UNSUPPORTED: back_deployment_runtime
 
-// REQUIRES: radar78290608
+// REQUIRES: rdar78290608
 
 import _Distributed
 
@@ -16,7 +16,11 @@ import _Distributed
 distributed actor SomeSpecificDistributedActor {
 
   distributed func hello() async throws {
-     print("hello from \(self.actorAddress)")
+     print("hello from \(self.id)")
+  }
+
+  distributed func echo(int: Int) async throws -> Int {
+    int
   }
 }
 
@@ -32,24 +36,35 @@ func __isLocalActor(_ actor: AnyObject) -> Bool {
 // ==== Fake Transport ---------------------------------------------------------
 
 @available(SwiftStdlib 5.5, *)
+struct ActorAddress: ActorIdentity {
+  let address: String
+  init(parse address : String) {
+    self.address = address
+  }
+}
+
+@available(SwiftStdlib 5.5, *)
 struct FakeTransport: ActorTransport {
-  func resolve<Act>(address: ActorAddress, as actorType: Act.Type)
-    throws -> ActorResolved<Act> where Act: DistributedActor {
-    fatalError()
-  }
-  func assignAddress<Act>(
-    _ actorType: Act.Type
-  ) -> ActorAddress where Act : DistributedActor {
-    ActorAddress(parse: "")
+  func decodeIdentity(from decoder: Decoder) throws -> AnyActorIdentity {
+    fatalError("not implemented \(#function)")
   }
 
-  public func actorReady<Act>(
-    _ actor: Act
-  ) where Act: DistributedActor {}
+  func resolve<Act>(_ identity: Act.ID, as actorType: Act.Type) throws -> ActorResolved<Act>
+      where Act: DistributedActor {
+    return .makeProxy
+  }
 
-  public func resignAddress(
-    _ address: ActorAddress
-  ) {}
+  func assignIdentity<Act>(_ actorType: Act.Type) -> AnyActorIdentity
+      where Act: DistributedActor {
+    .init(ActorAddress(parse: ""))
+  }
+
+  public func actorReady<Act>(_ actor: Act)
+      where Act: DistributedActor {
+    print("\(#function):\(actor)")
+  }
+
+  func resignIdentity(_ id: AnyActorIdentity) {}
 }
 
 // ==== Execute ----------------------------------------------------------------
@@ -60,7 +75,7 @@ func test_initializers() {
   let transport = FakeTransport()
 
   _ = SomeSpecificDistributedActor(transport: transport)
-  _ = try! SomeSpecificDistributedActor(resolve: address, using: transport)
+  _ = try! SomeSpecificDistributedActor(resolve: .init(address), using: transport)
 }
 
 @available(SwiftStdlib 5.5, *)
@@ -68,7 +83,7 @@ func test_address() {
   let transport = FakeTransport()
 
   let actor = SomeSpecificDistributedActor(transport: transport)
-  _ = actor.actorAddress
+  _ = actor.id
 }
 
 @available(SwiftStdlib 5.5, *)

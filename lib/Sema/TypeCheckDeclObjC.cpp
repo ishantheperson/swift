@@ -435,7 +435,8 @@ static bool checkObjCActorIsolation(const ValueDecl *VD,
   auto behavior = behaviorLimitForObjCReason(Reason, VD->getASTContext());
 
   switch (auto restriction = ActorIsolationRestriction::forDeclaration(
-              const_cast<ValueDecl *>(VD), /*fromExpression=*/false)) {
+              const_cast<ValueDecl *>(VD), VD->getDeclContext(),
+              /*fromExpression=*/false)) {
   case ActorIsolationRestriction::CrossActorSelf:
     // FIXME: Substitution map?
     diagnoseNonConcurrentTypesInReference(
@@ -552,7 +553,7 @@ static bool checkObjCInExtensionContext(const ValueDecl *value,
                 ->getModuleContext()
                 ->isImplicitDynamicEnabled())
           return false;
-        if (!classDecl->usesObjCGenericsModel()) {
+        if (!classDecl->isTypeErasedGenericClass()) {
           softenIfAccessNote(value, reason.getAttr(),
             value->diagnose(diag::objc_in_generic_extension,
                             classDecl->isGeneric())
@@ -1270,10 +1271,11 @@ static Optional<ObjCReason> shouldMarkClassAsObjC(const ClassDecl *CD) {
       reason.describe(CD);
     }
 
-    // Only allow ObjC-rooted classes to be @objc.
+    // Only allow actors and ObjC-rooted classes to be @objc.
     // (Leave a hole for test cases.)
     if (ancestry.contains(AncestryFlags::ObjC) &&
-        !ancestry.contains(AncestryFlags::ClangImported)) {
+        !ancestry.contains(AncestryFlags::ClangImported) &&
+        !CD->isActor()) {
       if (ctx.LangOpts.EnableObjCAttrRequiresFoundation) {
         swift::diagnoseAndRemoveAttr(CD, attr,
                                      diag::invalid_objc_swift_rooted_class)

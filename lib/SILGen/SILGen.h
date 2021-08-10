@@ -182,10 +182,10 @@ public:
   /// implementation function for an ObjC API that was imported
   /// as `async` in Swift.
   SILFunction *getOrCreateForeignAsyncCompletionHandlerImplFunction(
-                                           CanSILFunctionType blockType,
-                                           CanType continuationTy,
-                                           CanGenericSignature sig,
-                                           ForeignAsyncConvention convention);
+      CanSILFunctionType blockType, CanType continuationTy,
+      AbstractionPattern origFormalType, CanGenericSignature sig,
+      ForeignAsyncConvention convention,
+      Optional<ForeignErrorConvention> foreignError);
 
   /// Determine whether the given class has any instance variables that
   /// need to be destroyed.
@@ -497,8 +497,8 @@ public:
   FuncDecl *getAsyncLetGet();
   /// Retrieve the _Concurrency._asyncLetGetThrowing intrinsic.
   FuncDecl *getAsyncLetGetThrowing();
-  /// Retrieve the _Concurrency._asyncLetEnd intrinsic.
-  FuncDecl *getEndAsyncLet();
+  /// Retrieve the _Concurrency._asyncLetFinish intrinsic.
+  FuncDecl *getFinishAsyncLet();
 
   /// Retrieve the _Concurrency._taskFutureGet intrinsic.
   FuncDecl *getTaskFutureGet();

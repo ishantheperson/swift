@@ -549,6 +549,10 @@ def disable_bridging_pch : Flag<["-"], "disable-bridging-pch">,
 def lto : Joined<["-"], "lto=">,
   Flags<[FrontendOption, NoInteractiveOption]>,
   HelpText<"Specify the LTO type to either 'llvm-thin' or 'llvm-full'">;
+  
+def lto_library : Separate<["-"], "lto-library">,
+  Flags<[FrontendOption, ArgumentIsPath, NoInteractiveOption]>,
+  HelpText<"Perform LTO with <lto-library>">, MetaVarName<"<lto-library>">;
 
 def access_notes_path : Separate<["-"], "access-notes-path">,
   Flags<[FrontendOption, ArgumentIsPath]>,
@@ -594,6 +598,14 @@ def experimental_cxx_stdlib :
   Separate<["-"], "experimental-cxx-stdlib">,
   HelpText<"C++ standard library to use; forwarded to Clang's -stdlib flag">;
 
+def experimental_emit_module_separately:
+  Flag<["-"], "experimental-emit-module-separately">,
+  Flags<[FrontendOption, NoInteractiveOption, HelpHidden]>,
+  HelpText<"Schedule a swift module emission job instead of a merge-modules job (new Driver only)">;
+
+def requirement_machine_EQ : Joined<["-"], "requirement-machine=">,
+  Flags<[FrontendOption, ModuleInterfaceOption]>,
+  HelpText<"Control usage of experimental generics implementation: 'on', 'off', or 'verify'">;
 
 // Diagnostic control options
 def suppress_warnings : Flag<["-"], "suppress-warnings">,
@@ -1361,6 +1373,10 @@ def migrator: Flag<["-", "--"], "migrator">,
 def abort_on_module_fail: Flag<["-", "--"], "abort-on-module-fail">,
   Flags<[NoDriverOption, SwiftAPIDigesterOption]>,
   HelpText<"Abort if a module failed to load">;
+
+def disable_fail_on_error: Flag<["-", "--"], "disable-fail-on-error">,
+  Flags<[NoDriverOption, SwiftAPIDigesterOption]>,
+  HelpText<"Don't exit with a nonzero status if errors are emitted">;
 
 def debug_mapping: Flag<["-", "--"], "debug-mapping">,
   Flags<[NoDriverOption, SwiftAPIDigesterOption]>,

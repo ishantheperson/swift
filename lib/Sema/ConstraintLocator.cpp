@@ -60,9 +60,11 @@ unsigned LocatorPathElt::getNewSummaryFlags() const {
   case ConstraintLocator::DynamicType:
   case ConstraintLocator::SubscriptMember:
   case ConstraintLocator::OpenedGeneric:
+  case ConstraintLocator::OpenedOpaqueArchetype:
   case ConstraintLocator::WrappedValue:
   case ConstraintLocator::GenericParameter:
   case ConstraintLocator::GenericArgument:
+  case ConstraintLocator::TupleType:
   case ConstraintLocator::NamedTupleElement:
   case ConstraintLocator::TupleElement:
   case ConstraintLocator::ProtocolRequirement:
@@ -356,6 +358,12 @@ void ConstraintLocator::dump(SourceManager *sm, raw_ostream &out) const {
       out << "member reference base";
       break;
 
+    case TupleType: {
+      auto tupleElt = elt.castTo<LocatorPathElt::TupleType>();
+      out << "tuple type '" << tupleElt.getType()->getString(PO) << "'";
+      break;
+    }
+
     case NamedTupleElement: {
       auto tupleElt = elt.castTo<LocatorPathElt::NamedTupleElement>();
       out << "named tuple element #" << llvm::utostr(tupleElt.getIndex());
@@ -409,6 +417,10 @@ void ConstraintLocator::dump(SourceManager *sm, raw_ostream &out) const {
     }
     case OpenedGeneric:
       out << "opened generic";
+      break;
+
+    case OpenedOpaqueArchetype:
+      out << "opened opaque archetype";
       break;
 
     case ConditionalRequirement: {

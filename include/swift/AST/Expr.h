@@ -1370,11 +1370,74 @@ public:
   }
 };
 
+/// Describes the actor to which an implicit-async expression will hop.
+struct ImplicitActorHopTarget {
+  enum Kind {
+    /// The "self" instance.
+    InstanceSelf,
+    /// A global actor with the given type.
+    GlobalActor,
+    /// An isolated parameter in a call.
+    IsolatedParameter,
+  };
+
+private:
+  /// The lower two bits are the Kind, and the remaining bits are used for
+  /// the payload, which might by a TypeBase * (for a global actor) or a
+  /// integer value (for an isolated parameter).
+  uintptr_t bits;
+
+  constexpr ImplicitActorHopTarget(uintptr_t bits) : bits(bits) { }
+
+public:
+  /// Default-initialized to instance "self".
+  constexpr ImplicitActorHopTarget() : bits(0) { }
+
+  static ImplicitActorHopTarget forInstanceSelf() {
+    return ImplicitActorHopTarget(InstanceSelf);
+  }
+
+  static ImplicitActorHopTarget forGlobalActor(Type globalActor) {
+    uintptr_t bits =
+      reinterpret_cast<uintptr_t>(globalActor.getPointer()) | GlobalActor;
+    return ImplicitActorHopTarget(bits);
+  }
+
+  static ImplicitActorHopTarget forIsolatedParameter(unsigned index) {
+    uintptr_t bits = static_cast<uintptr_t>(index) << 2 | IsolatedParameter;
+    return ImplicitActorHopTarget(bits);
+  }
+
+  /// Determine the kind of implicit actor hop being performed.
+  Kind getKind() const {
+    return static_cast<Kind>(bits & 0x03);
+  }
+
+  operator Kind() const {
+    return getKind();
+  }
+
+  /// Retrieve the global actor type for an implicit hop to a global actor.
+  Type getGlobalActor() const {
+    assert(getKind() == GlobalActor);
+    return Type(reinterpret_cast<TypeBase *>(bits & ~0x03));
+  }
+
+  /// Retrieve the (zero-based) parameter index for the isolated parameter
+  /// in a call.
+  unsigned getIsolatedParameterIndex() const {
+    assert(getKind() == IsolatedParameter);
+    return bits >> 2;
+  }
+};
+
+
 /// DeclRefExpr - A reference to a value, "x".
 class DeclRefExpr : public Expr {
   /// The declaration pointer.
   ConcreteDeclRef D;
   DeclNameLoc Loc;
+  ImplicitActorHopTarget implicitActorHopTarget;
 
 public:
   DeclRefExpr(ConcreteDeclRef D, DeclNameLoc Loc, bool Implicit,
@@ -1401,13 +1464,18 @@ public:
   }
 
   /// Determine whether this reference needs to happen asynchronously, i.e.,
-  /// guarded by hop_to_executor
-  bool isImplicitlyAsync() const { return Bits.DeclRefExpr.IsImplicitlyAsync; }
+  /// guarded by hop_to_executor, and if so describe the target.
+  Optional<ImplicitActorHopTarget> isImplicitlyAsync() const {
+    if (!Bits.DeclRefExpr.IsImplicitlyAsync)
+      return None;
 
-  /// Set whether this reference needs to happen asynchronously, i.e.,
-  /// guarded by hop_to_executor
-  void setImplicitlyAsync(bool isImplicitlyAsync) {
-    Bits.DeclRefExpr.IsImplicitlyAsync = isImplicitlyAsync;
+    return implicitActorHopTarget;
+  }
+
+  /// Note that this reference is implicitly async and set the target.
+  void setImplicitlyAsync(ImplicitActorHopTarget target) {
+    Bits.DeclRefExpr.IsImplicitlyAsync = true;
+    implicitActorHopTarget = target;
   }
 
   /// Determine whether this reference needs may implicitly throw.
@@ -1735,6 +1803,7 @@ public:
 class LookupExpr : public Expr {
   Expr *Base;
   ConcreteDeclRef Member;
+  ImplicitActorHopTarget implicitActorHopTarget;
 
 protected:
   explicit LookupExpr(ExprKind Kind, Expr *base, ConcreteDeclRef member,
@@ -1758,7 +1827,7 @@ public:
 
   /// Determine whether the operation has a known underlying declaration or not.
   bool hasDecl() const { return static_cast<bool>(Member); }
-  
+
   /// Retrieve the declaration that this /// operation refers to.
   /// Only valid when \c hasDecl() is true.
   ConcreteDeclRef getDecl() const {
@@ -1773,13 +1842,18 @@ public:
   void setIsSuper(bool isSuper) { Bits.LookupExpr.IsSuper = isSuper; }
 
   /// Determine whether this reference needs to happen asynchronously, i.e.,
-  /// guarded by hop_to_executor
-  bool isImplicitlyAsync() const { return Bits.LookupExpr.IsImplicitlyAsync; }
+  /// guarded by hop_to_executor, and if so describe the target.
+  Optional<ImplicitActorHopTarget> isImplicitlyAsync() const {
+    if (!Bits.LookupExpr.IsImplicitlyAsync)
+      return None;
 
-  /// Set whether this reference needs to happen asynchronously, i.e.,
-  /// guarded by hop_to_executor
-  void setImplicitlyAsync(bool isImplicitlyAsync) {
-    Bits.LookupExpr.IsImplicitlyAsync = isImplicitlyAsync;
+    return implicitActorHopTarget;
+  }
+
+  /// Note that this reference is implicitly async and set the target.
+  void setImplicitlyAsync(ImplicitActorHopTarget target) {
+    Bits.LookupExpr.IsImplicitlyAsync = true;
+    implicitActorHopTarget = target;
   }
 
   /// Determine whether this reference needs may implicitly throw.
@@ -3300,8 +3374,9 @@ public:
   }
 };
 
-
-/// Use an opaque type to abstract a value of the underlying concrete type.
+/// Use an opaque type to abstract a value of the underlying concrete type,
+/// possibly nested inside other types. E.g. can perform coversions "T --->
+/// (opaque type)" and "S<T> ---> S<(opaque type)>".
 class UnderlyingToOpaqueExpr : public ImplicitConversionExpr {
 public:
   UnderlyingToOpaqueExpr(Expr *subExpr, Type ty)
@@ -4662,7 +4737,9 @@ class ApplyExpr : public Expr {
 
   /// The argument being passed to it.
   Expr *Arg;
-  
+
+  ImplicitActorHopTarget implicitActorHopTarget;
+
   /// Returns true if \c e could be used as the call's argument. For most \c ApplyExpr
   /// subclasses, this means it is a \c ParenExpr or \c TupleExpr.
   bool validateArg(Expr *e) const;
@@ -4735,11 +4812,19 @@ public:
   ///
   /// where the new closure is declared to be async.
   ///
-  bool implicitlyAsync() const {
-    return Bits.ApplyExpr.ImplicitlyAsync;
+  /// When the application is implciitly async, the result describes
+  /// the actor to which we need to need to hop.
+  Optional<ImplicitActorHopTarget> isImplicitlyAsync() const {
+    if (!Bits.ApplyExpr.ImplicitlyAsync)
+      return None;
+
+    return implicitActorHopTarget;
   }
-  void setImplicitlyAsync(bool flag) {
-    Bits.ApplyExpr.ImplicitlyAsync = flag;
+
+  /// Note that this application is implicitly async and set the target.
+  void setImplicitlyAsync(ImplicitActorHopTarget target) {
+    Bits.ApplyExpr.ImplicitlyAsync = true;
+    implicitActorHopTarget = target;
   }
 
   /// Is this application _implicitly_ required to be a throwing call?
@@ -4818,6 +4903,14 @@ public:
                   /*trailingClosures=*/{}, /*implicit=*/true, getType);
   }
 
+  /// Create a new implicit call expression with no arguments and no
+  /// source-location information.
+  ///
+  /// \param fn The nullary function being called.
+  static CallExpr *createImplicitEmpty(ASTContext &ctx, Expr *fn) {
+    return createImplicit(ctx, fn, {}, {});
+  }
+
   /// Create a new call expression.
   ///
   /// \param fn The function being called
@@ -4876,9 +4969,12 @@ public:
   
 /// PrefixUnaryExpr - Prefix unary expressions like '!y'.
 class PrefixUnaryExpr : public ApplyExpr {
+  PrefixUnaryExpr(Expr *fn, Expr *operand, Type ty = Type())
+      : ApplyExpr(ExprKind::PrefixUnary, fn, operand, /*implicit*/ false, ty) {}
+
 public:
-  PrefixUnaryExpr(Expr *Fn, Expr *Arg, Type Ty = Type())
-    : ApplyExpr(ExprKind::PrefixUnary, Fn, Arg, /*Implicit=*/false, Ty) {}
+  static PrefixUnaryExpr *create(ASTContext &ctx, Expr *fn, Expr *operand,
+                                 Type ty = Type());
 
   SourceLoc getLoc() const { return getFn()->getStartLoc(); }
 
@@ -4896,9 +4992,13 @@ public:
 
 /// PostfixUnaryExpr - Postfix unary expressions like 'y!'.
 class PostfixUnaryExpr : public ApplyExpr {
+  PostfixUnaryExpr(Expr *fn, Expr *operand, Type ty = Type())
+      : ApplyExpr(ExprKind::PostfixUnary, fn, operand, /*implicit*/ false, ty) {
+  }
+
 public:
-  PostfixUnaryExpr(Expr *Fn, Expr *Arg, Type Ty = Type())
-    : ApplyExpr(ExprKind::PostfixUnary, Fn, Arg, /*Implicit=*/false, Ty) {}
+  static PostfixUnaryExpr *create(ASTContext &ctx, Expr *fn, Expr *operand,
+                                  Type ty = Type());
 
   SourceLoc getLoc() const { return getFn()->getStartLoc(); }
   
@@ -4966,14 +5066,18 @@ public:
 /// is modeled as a DeclRefExpr or OverloadSetRefExpr on the method.
 class DotSyntaxCallExpr : public SelfApplyExpr {
   SourceLoc DotLoc;
-  
-public:
-  DotSyntaxCallExpr(Expr *FnExpr, SourceLoc DotLoc, Expr *BaseExpr,
-                    Type Ty = Type())
-    : SelfApplyExpr(ExprKind::DotSyntaxCall, FnExpr, BaseExpr, Ty),
-      DotLoc(DotLoc) {
+
+  DotSyntaxCallExpr(Expr *fnExpr, SourceLoc dotLoc, Expr *baseExpr,
+                    Type ty = Type())
+      : SelfApplyExpr(ExprKind::DotSyntaxCall, fnExpr, baseExpr, ty),
+        DotLoc(dotLoc) {
     setImplicit(DotLoc.isInvalid());
   }
+
+public:
+  static DotSyntaxCallExpr *create(ASTContext &ctx, Expr *fnExpr,
+                                   SourceLoc dotLoc, Expr *baseExpr,
+                                   Type ty = Type());
 
   SourceLoc getDotLoc() const { return DotLoc; }
 
@@ -4990,9 +5094,12 @@ public:
 /// actual reference to function which returns the constructor is modeled
 /// as a DeclRefExpr.
 class ConstructorRefCallExpr : public SelfApplyExpr {
+  ConstructorRefCallExpr(Expr *fnExpr, Expr *baseExpr, Type ty = Type())
+      : SelfApplyExpr(ExprKind::ConstructorRefCall, fnExpr, baseExpr, ty) {}
+
 public:
-  ConstructorRefCallExpr(Expr *FnExpr, Expr *BaseExpr, Type Ty = Type())
-    : SelfApplyExpr(ExprKind::ConstructorRefCall, FnExpr, BaseExpr, Ty) {}
+  static ConstructorRefCallExpr *create(ASTContext &ctx, Expr *fnExpr,
+                                        Expr *baseExpr, Type ty = Type());
 
   SourceLoc getLoc() const { return getFn()->getLoc(); }
   SourceLoc getStartLoc() const { return getBase()->getStartLoc(); }
@@ -5643,6 +5750,7 @@ public:
   /// - a resolved ValueDecl, referring to
   /// - a subscript index expression, which may or may not be resolved
   /// - an optional chaining, forcing, or wrapping component
+  /// - a code completion token
   class Component {
   public:
     enum class Kind: unsigned {
@@ -5657,6 +5765,7 @@ public:
       Identity,
       TupleElement,
       DictionaryKey,
+      CodeCompletion,
     };
   
   private:
@@ -5682,7 +5791,8 @@ public:
     Kind KindValue;
     Type ComponentType;
     SourceLoc Loc;
-    
+
+    // Private constructor for subscript component.
     explicit Component(ASTContext *ctxForCopyingLabels,
                        DeclNameOrRef decl,
                        Expr *indexExpr,
@@ -5692,27 +5802,31 @@ public:
                        Type type,
                        SourceLoc loc);
 
-    // Private constructor for tuple element kind
-    Component(unsigned tupleIndex, Type elementType, SourceLoc loc)
-      : Component(nullptr, {}, nullptr, {}, {}, Kind::TupleElement,
-        elementType, loc) {
+    // Private constructor for property or #keyPath dictionary key.
+    explicit Component(DeclNameOrRef decl, Kind kind, Type type, SourceLoc loc)
+        : Component(kind, type, loc) {
+      assert(kind == Kind::Property || kind == Kind::UnresolvedProperty ||
+             kind == Kind::DictionaryKey);
+      Decl = decl;
+    }
+
+    // Private constructor for tuple element kind.
+    explicit Component(unsigned tupleIndex, Type elementType, SourceLoc loc)
+        : Component(Kind::TupleElement, elementType, loc) {
       TupleIndex = tupleIndex;
     }
-    
+
+    // Private constructor for basic components with no additional information.
+    explicit Component(Kind kind, Type type, SourceLoc loc)
+        : Decl(), KindValue(kind), ComponentType(type), Loc(loc) {}
+
   public:
-    Component()
-      : Component(nullptr, {}, nullptr, {}, {}, Kind::Invalid,
-                  Type(), SourceLoc())
-    {}
-    
+    Component() : Component(Kind::Invalid, Type(), SourceLoc()) {}
+
     /// Create an unresolved component for a property.
     static Component forUnresolvedProperty(DeclNameRef UnresolvedName,
                                            SourceLoc Loc) {
-      return Component(nullptr,
-                       UnresolvedName, nullptr, {}, {},
-                       Kind::UnresolvedProperty,
-                       Type(),
-                       Loc);
+      return Component(UnresolvedName, Kind::UnresolvedProperty, Type(), Loc);
     }
     
     /// Create an unresolved component for a subscript.
@@ -5742,38 +5856,26 @@ public:
     
     /// Create an unresolved optional force `!` component.
     static Component forUnresolvedOptionalForce(SourceLoc BangLoc) {
-      return Component(nullptr, {}, nullptr, {}, {},
-                       Kind::OptionalForce,
-                       Type(),
-                       BangLoc);
+      return Component(Kind::OptionalForce, Type(), BangLoc);
     }
     
     /// Create an unresolved optional chain `?` component.
     static Component forUnresolvedOptionalChain(SourceLoc QuestionLoc) {
-      return Component(nullptr, {}, nullptr, {}, {},
-                       Kind::OptionalChain,
-                       Type(),
-                       QuestionLoc);
+      return Component(Kind::OptionalChain, Type(), QuestionLoc);
     }
     
     /// Create a component for a property.
     static Component forProperty(ConcreteDeclRef property,
                                  Type propertyType,
                                  SourceLoc loc) {
-      return Component(nullptr, property, nullptr, {}, {},
-                       Kind::Property,
-                       propertyType,
-                       loc);
+      return Component(property, Kind::Property, propertyType, loc);
     }
 
     /// Create a component for a dictionary key (#keyPath only).
     static Component forDictionaryKey(DeclNameRef UnresolvedName,
                                       Type valueType,
                                       SourceLoc loc) {
-      return Component(nullptr, UnresolvedName, nullptr, {}, {},
-                       Kind::DictionaryKey,
-                       valueType,
-                       loc);
+      return Component(UnresolvedName, Kind::DictionaryKey, valueType, loc);
     }
     
     /// Create a component for a subscript.
@@ -5799,32 +5901,24 @@ public:
     
     /// Create an optional-forcing `!` component.
     static Component forOptionalForce(Type forcedType, SourceLoc bangLoc) {
-      return Component(nullptr, {}, nullptr, {}, {},
-                       Kind::OptionalForce, forcedType,
-                       bangLoc);
+      return Component(Kind::OptionalForce, forcedType, bangLoc);
     }
     
     /// Create an optional-chaining `?` component.
     static Component forOptionalChain(Type unwrappedType,
                                       SourceLoc questionLoc) {
-      return Component(nullptr, {}, nullptr, {}, {},
-                       Kind::OptionalChain, unwrappedType,
-                       questionLoc);
+      return Component(Kind::OptionalChain, unwrappedType, questionLoc);
     }
     
     /// Create an optional-wrapping component. This doesn't have a surface
     /// syntax but may appear when the non-optional result of an optional chain
     /// is implicitly wrapped.
     static Component forOptionalWrap(Type wrappedType) {
-      return Component(nullptr, {}, nullptr, {}, {},
-                       Kind::OptionalWrap, wrappedType,
-                       SourceLoc());
+      return Component(Kind::OptionalWrap, wrappedType, SourceLoc());
     }
     
     static Component forIdentity(SourceLoc selfLoc) {
-      return Component(nullptr, {}, nullptr, {}, {},
-                       Kind::Identity, Type(),
-                       selfLoc);
+      return Component(Kind::Identity, Type(), selfLoc);
     }
     
     static Component forTupleElement(unsigned fieldNumber,
@@ -5832,8 +5926,11 @@ public:
                                      SourceLoc loc) {
       return Component(fieldNumber, elementType, loc);
     }
-      
-      
+
+    static Component forCodeCompletion(SourceLoc Loc) {
+      return Component(Kind::CodeCompletion, Type(), Loc);
+    }
+
     SourceLoc getLoc() const {
       return Loc;
     }
@@ -5871,6 +5968,7 @@ public:
       case Kind::UnresolvedSubscript:
       case Kind::UnresolvedProperty:
       case Kind::Invalid:
+      case Kind::CodeCompletion:
         return false;
       }
       llvm_unreachable("unhandled kind");
@@ -5891,6 +5989,7 @@ public:
       case Kind::Identity:
       case Kind::TupleElement:
       case Kind::DictionaryKey:
+      case Kind::CodeCompletion:
         return nullptr;
       }
       llvm_unreachable("unhandled kind");
@@ -5911,6 +6010,7 @@ public:
       case Kind::Identity:
       case Kind::TupleElement:
       case Kind::DictionaryKey:
+      case Kind::CodeCompletion:
         llvm_unreachable("no subscript labels for this kind");
       }
       llvm_unreachable("unhandled kind");
@@ -5934,6 +6034,7 @@ public:
       case Kind::Identity:
       case Kind::TupleElement:
       case Kind::DictionaryKey:
+      case Kind::CodeCompletion:
         return {};
       }
       llvm_unreachable("unhandled kind");
@@ -5957,6 +6058,7 @@ public:
       case Kind::Property:
       case Kind::Identity:
       case Kind::TupleElement:
+      case Kind::CodeCompletion:
         llvm_unreachable("no unresolved name for this kind");
       }
       llvm_unreachable("unhandled kind");
@@ -5977,6 +6079,7 @@ public:
       case Kind::Identity:
       case Kind::TupleElement:
       case Kind::DictionaryKey:
+      case Kind::CodeCompletion:
         return false;
       }
       llvm_unreachable("unhandled kind");
@@ -5997,6 +6100,7 @@ public:
       case Kind::Identity:
       case Kind::TupleElement:
       case Kind::DictionaryKey:
+      case Kind::CodeCompletion:
         llvm_unreachable("no decl ref for this kind");
       }
       llvm_unreachable("unhandled kind");
@@ -6017,6 +6121,7 @@ public:
         case Kind::Property:
         case Kind::Subscript:
         case Kind::DictionaryKey:
+        case Kind::CodeCompletion:
           llvm_unreachable("no field number for this kind");
       }
       llvm_unreachable("unhandled kind");

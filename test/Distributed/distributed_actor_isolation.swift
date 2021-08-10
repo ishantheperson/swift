@@ -1,8 +1,16 @@
-// RUN: %target-typecheck-verify-swift -enable-experimental-distributed
+// RUN: %target-typecheck-verify-swift -enable-experimental-distributed -disable-availability-checking
 // REQUIRES: concurrency
 // REQUIRES: distributed
 
 import _Distributed
+
+@available(SwiftStdlib 5.5, *)
+struct ActorAddress: ActorIdentity {
+  let address: String
+  init(parse address : String) {
+    self.address = address
+  }
+}
 
 @available(SwiftStdlib 5.5, *)
 actor LocalActor_1 {
@@ -15,13 +23,6 @@ actor LocalActor_1 {
 }
 
 struct NotCodableValue { }
-
-@available(SwiftStdlib 5.5, *)
-distributed struct StructNope {} // expected-error{{distributed' modifier cannot be applied to this declaration}}
-@available(SwiftStdlib 5.5, *)
-distributed class ClassNope {} // expected-error{{'distributed' can only be applied to 'actor' definitions, and distributed actor-isolated async functions}}
-@available(SwiftStdlib 5.5, *)
-distributed enum EnumNope {} // expected-error{{distributed' modifier cannot be applied to this declaration}}
 
 @available(SwiftStdlib 5.5, *)
 distributed actor DistributedActor_1 {
@@ -88,6 +89,17 @@ distributed actor DistributedActor_1 {
     fatalError()
   }
 
+  static func staticFunc() -> String { "" } // ok
+
+// TODO: should be able to handle a static, global actor isolated function as well
+//  @MainActor
+//  static func staticMainActorFunc() -> String { "" } // ok
+
+  static distributed func staticDistributedFunc() -> String {
+    // expected-error@-1{{'distributed' functions cannot be 'static'}}{10-21=}
+    fatalError()
+  }
+
   func test_inside() async throws {
     _ = self.name
     _ = self.computedMutable
@@ -112,8 +124,8 @@ func test_outside(
   distributed: DistributedActor_1
 ) async throws {
   // ==== properties
-  _ = distributed.actorAddress // ok
-  distributed.actorAddress = ActorAddress(parse: "mock://1.1.1.1:8080/#123121") // expected-error{{cannot assign to property: 'actorAddress' is immutable}}
+  _ = distributed.id // ok
+  distributed.id = AnyActorIdentity(ActorAddress(parse: "mock://1.1.1.1:8080/#123121")) // expected-error{{cannot assign to property: 'id' is immutable}})
 
   _ = local.name // ok, special case that let constants are okey
   let _: String = local.mutable // ok, special case that let constants are okey
@@ -122,13 +134,32 @@ func test_outside(
 
   // ==== special properties (@_distributedActorIndependent)
   // the distributed actor's special fields may always be referred to
-  _ = distributed.actorAddress
+  _ = distributed.id
   _ = distributed.actorTransport
+
+  // ==== static functions
+  _ = distributed.staticFunc() // expected-error{{static member 'staticFunc' cannot be used on instance of type 'DistributedActor_1'}}
+  _ = DistributedActor_1.staticFunc()
 
   // ==== non-distributed functions
   _ = await distributed.hello() // expected-error{{only 'distributed' functions can be called from outside the distributed actor}}
   _ = await distributed.helloAsync() // expected-error{{only 'distributed' functions can be called from outside the distributed actor}}
   _ = try await distributed.helloAsyncThrows() // expected-error{{only 'distributed' functions can be called from outside the distributed actor}}
+}
+
+// ==== Protocols and static (non isolated functions)
+
+@available(SwiftStdlib 5.5, *)
+protocol P {
+  static func hello() -> String
+}
+@available(SwiftStdlib 5.5, *)
+extension P {
+  static func hello() -> String { "" }
+}
+
+@available(SwiftStdlib 5.5, *)
+distributed actor ALL: P {
 }
 
 // ==== Codable parameters and return types ------------------------------------

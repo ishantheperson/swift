@@ -333,7 +333,7 @@ public:
 
   /// Emits one last diagnostic, adds the current module details and errors to
   /// the pretty stack trace, and then aborts.
-  LLVM_ATTRIBUTE_NORETURN void fatal(llvm::Error error) const;
+  [[noreturn]] void fatal(llvm::Error error) const;
   void fatalIfNotSuccess(llvm::Error error) const {
     if (error)
       fatal(std::move(error));
@@ -344,7 +344,7 @@ public:
     fatal(expected.takeError());
   }
 
-  LLVM_ATTRIBUTE_NORETURN void fatal() const {
+  [[noreturn]] void fatal() const {
     fatal(llvm::make_error<llvm::StringError>(
         "(see \"While...\" info below)", llvm::inconvertibleErrorCode()));
   }
@@ -388,6 +388,10 @@ private:
   llvm::Error
   readGenericRequirementsChecked(SmallVectorImpl<Requirement> &requirements,
                                  llvm::BitstreamCursor &Cursor);
+
+  /// Read a list of associated type declarations in a protocol.
+  void readAssociatedTypes(SmallVectorImpl<AssociatedTypeDecl *> &assocTypes,
+                           llvm::BitstreamCursor &Cursor);
 
   /// Populates the protocol's default witness table.
   ///
@@ -708,6 +712,10 @@ public:
   void
   loadRequirementSignature(const ProtocolDecl *proto, uint64_t contextData,
                            SmallVectorImpl<Requirement> &requirements) override;
+
+  void
+  loadAssociatedTypes(const ProtocolDecl *proto, uint64_t contextData,
+                      SmallVectorImpl<AssociatedTypeDecl *> &assocTypes) override;
 
   Optional<StringRef> getGroupNameById(unsigned Id) const;
   Optional<StringRef> getSourceFileNameById(unsigned Id) const;

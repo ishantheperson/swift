@@ -556,6 +556,29 @@ public:
   /// Return the next token that will be installed by \c consumeToken.
   const Token &peekToken();
 
+  /// Consumes K tokens within a backtracking scope before calling \c f and
+  /// providing it with the backtracking scope. Unless if the backtracking is
+  /// explicitly cancelled, the parser's token state is restored after \c f
+  /// returns.
+  ///
+  /// \param K The number of tokens ahead to skip. Zero is the current token.
+  /// \param f The function to apply after skipping K tokens ahead.
+  ///          The value returned by \c f will be returned by \c peekToken
+  ///           after the parser is rolled back.
+  /// \returns the value returned by \c f
+  /// \note When calling, you may need to specify the \c Val type
+  ///       explicitly as a type parameter.
+  template <typename Val>
+  Val lookahead(unsigned char K,
+                llvm::function_ref<Val(CancellableBacktrackingScope &)> f) {
+    CancellableBacktrackingScope backtrackScope(*this);
+
+    for (unsigned char i = 0; i < K; ++i)
+      consumeToken();
+
+    return f(backtrackScope);
+  }
+
   /// Consume a token that we created on the fly to correct the original token
   /// stream from lexer.
   void consumeExtraToken(Token K);
@@ -1127,7 +1150,7 @@ public:
 
   ParserResult<ImportDecl> parseDeclImport(ParseDeclOptions Flags,
                                            DeclAttributes &Attributes);
-  ParserStatus parseInheritance(SmallVectorImpl<TypeLoc> &Inherited,
+  ParserStatus parseInheritance(SmallVectorImpl<InheritedEntry> &Inherited,
                                 bool allowClassRequirement,
                                 bool allowAnyObject);
   ParserStatus parseDeclItem(bool &PreviousHadSemi,
@@ -1231,6 +1254,13 @@ public:
   ParserResult<TypeRepr> parseType(
       Diag<> MessageID,
       ParseTypeReason reason = ParseTypeReason::Unspecified);
+
+  /// Parse a type optionally prefixed by a list of named opaque parameters. If
+  /// no params present, return 'type'. Otherwise, return 'type-named-opaque'.
+  ///
+  ///   type-named-opaque:
+  ///     generic-params type
+  ParserResult<TypeRepr> parseTypeWithOpaqueParams(Diag<> MessageID);
 
   ParserResult<TypeRepr>
     parseTypeSimpleOrComposition(Diag<> MessageID, ParseTypeReason reason);
@@ -1765,11 +1795,21 @@ public:
   //===--------------------------------------------------------------------===//
   // Availability Specification Parsing
 
+  /// The source of an availability spec list.
+  enum class AvailabilitySpecSource: uint8_t {
+    /// A spec from '@available(<spec>, ...)' or '#available(<spec>, ...)'.
+    Available,
+    /// A spec from '#unavailable(<spec>, ...)'.
+    Unavailable,
+    /// A spec from a '-define-availability "Name:<spec>, ..."' frontend arg.
+    Macro,
+  };
+
   /// Parse a comma-separated list of availability specifications. Try to
-  /// expand availability macros when /p ParsingMacroDefinition is false.
+  /// expand availability macros when /p Source is not a command line macro.
   ParserStatus
   parseAvailabilitySpecList(SmallVectorImpl<AvailabilitySpec *> &Specs,
-                            bool ParsingMacroDefinition = false);
+                            AvailabilitySpecSource Source);
 
   /// Does the current matches an argument macro name? Parsing compiler
   /// arguments as required without consuming tokens from the source file
@@ -1896,9 +1936,6 @@ DeclNameRef formDeclNameRef(ASTContext &ctx,
                             bool isFunctionName,
                             bool isInitializer,
                             bool isSubscript = false);
-
-/// Parse a stringified Swift declaration name, e.g. "init(frame:)".
-DeclName parseDeclName(ASTContext &ctx, StringRef name);
 
 /// Whether a given token can be the start of a decl.
 bool isKeywordPossibleDeclStart(const Token &Tok);

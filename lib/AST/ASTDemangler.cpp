@@ -205,7 +205,7 @@ createSubstitutionMapFromGenericArgs(GenericSignature genericSig,
   if (!genericSig)
     return SubstitutionMap();
   
-  if (genericSig->getGenericParams().size() != args.size())
+  if (genericSig.getGenericParams().size() != args.size())
     return SubstitutionMap();
 
   return SubstitutionMap::get(
@@ -262,7 +262,7 @@ Type ASTBuilder::resolveOpaqueType(NodePointer opaqueDescriptor,
     auto opaqueDecl = parentModule->lookupOpaqueResultType(mangledName);
     if (!opaqueDecl)
       return Type();
-    // TODO: multiple opaque types
+    // TODO [OPAQUE SUPPORT]: multiple opaque types
     assert(ordinal == 0 && "not implemented");
     if (ordinal != 0)
       return Type();
@@ -275,7 +275,7 @@ Type ASTBuilder::resolveOpaqueType(NodePointer opaqueDescriptor,
     SubstitutionMap subs = createSubstitutionMapFromGenericArgs(
         opaqueDecl->getGenericSignature(), allArgs,
         LookUpConformanceInModule(parentModule));
-    return OpaqueTypeArchetypeType::get(opaqueDecl, subs);
+    return OpaqueTypeArchetypeType::get(opaqueDecl, ordinal, subs);
   }
   
   // TODO: named opaque types
@@ -306,7 +306,7 @@ Type ASTBuilder::createBoundGenericType(GenericTypeDecl *decl,
 
   auto genericSig = aliasDecl->getGenericSignature();
   for (unsigned i = 0, e = args.size(); i < e; ++i) {
-    auto origTy = genericSig->getInnermostGenericParams()[i];
+    auto origTy = genericSig.getInnermostGenericParams()[i];
     auto substTy = args[i];
 
     subs[origTy->getCanonicalType()->castTo<GenericTypeParamType>()] =

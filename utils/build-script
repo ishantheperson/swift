@@ -56,7 +56,8 @@ _SUPPORTED_XCODE_BUILDS = [
     ("12.3", "12C33"),
     ("12.4", "12D4e"),
     ("12.5", "12E262"),
-    ("13.0 beta", "13A5154h")
+    ("13.0 beta", "13A5154h"),
+    ("13.0 beta 4", "13A5201i")
 ]
 
 # -----------------------------------------------------------------------------
@@ -841,6 +842,7 @@ class BuildScriptInvocation(object):
         """
 
         args = self.args
+        args.build_root = self.workspace.build_root
 
         options = {}
         for host_target in [args.host_target] + args.cross_compile_hosts:
@@ -862,6 +864,8 @@ class BuildScriptInvocation(object):
                     config.swift_benchmark_run_targets),
                 "SWIFT_TEST_TARGETS": " ".join(
                     config.swift_test_run_targets),
+                "SWIFT_FLAGS": config.swift_flags,
+                "SWIFT_TARGET_CMAKE_OPTIONS": config.cmake_options,
             }
 
         return options

@@ -19,7 +19,7 @@ endif()
 list(APPEND  SWIFT_RUNTIME_SWIFT_COMPILE_FLAGS "-Xfrontend" "-verify-syntax-tree")
 
 if(SWIFT_STDLIB_SIL_DEBUGGING)
-  list(APPEND SWIFT_RUNTIME_SWIFT_COMPILE_FLAGS "-Xfrontend" "-gsil")
+  list(APPEND SWIFT_RUNTIME_SWIFT_COMPILE_FLAGS "-Xfrontend" "-sil-based-debuginfo")
 endif()
 
 # Build the runtime with -Wall to catch, e.g., uninitialized variables
@@ -41,16 +41,18 @@ endif()
 
 # C++ code in the runtime and standard library should generally avoid
 # introducing static constructors or destructors.
-check_cxx_compiler_flag("-Werror -Wglobal-constructors" CXX_SUPPORTS_GLOBAL_CONSTRUCTORS_WARNING)
+check_cxx_compiler_flag("-Wglobal-constructors -Werror=global-constructors" CXX_SUPPORTS_GLOBAL_CONSTRUCTORS_WARNING)
 if(CXX_SUPPORTS_GLOBAL_CONSTRUCTORS_WARNING)
-  list(APPEND SWIFT_RUNTIME_CORE_CXX_FLAGS "-Wglobal-constructors")
+  list(APPEND SWIFT_RUNTIME_CORE_CXX_FLAGS "-Wglobal-constructors"
+    "-Werror=global-constructors")
 endif()
 
 # C++ code in the runtime and standard library should generally avoid
 # introducing static constructors or destructors.
-check_cxx_compiler_flag("-Wexit-time-destructors" CXX_SUPPORTS_EXIT_TIME_DESTRUCTORS_WARNING)
+check_cxx_compiler_flag("-Wexit-time-destructors -Werror=exit-time-destructors" CXX_SUPPORTS_EXIT_TIME_DESTRUCTORS_WARNING)
 if(CXX_SUPPORTS_EXIT_TIME_DESTRUCTORS_WARNING)
-  list(APPEND SWIFT_RUNTIME_CORE_CXX_FLAGS "-Wexit-time-destructors")
+  list(APPEND SWIFT_RUNTIME_CORE_CXX_FLAGS "-Wexit-time-destructors"
+    "-Werror=exit-time-destructors")
 endif()
 
 add_subdirectory(SwiftShims)

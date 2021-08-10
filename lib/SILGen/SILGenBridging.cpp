@@ -1569,8 +1569,10 @@ void SILGenFunction::emitNativeToForeignThunk(SILDeclRef thunk) {
     if (thunk.hasDecl()) {
       isolation = getActorIsolation(thunk.getDecl());
     }
-    
-    if (isolation) {
+
+    // A hop is only needed in the thunk if it is global-actor isolated.
+    // Native, instance-isolated async methods will hop in the prologue.
+    if (isolation && isolation->isGlobalActor()) {
       emitHopToTargetActor(loc, *isolation, None);
     }
   }
@@ -2045,7 +2047,8 @@ void SILGenFunction::emitDistributedThunk(SILDeclRef thunk) {
     B.createCondBranch(loc, isRemoteResultUnwrapped, isRemoteBB, isLocalBB);
   }
 
-  // if __isRemoteActor(self) {
+  // // if __isRemoteActor(self)
+  // {
   //   return try await self._remote_X(...)
   // }
   {
@@ -2053,9 +2056,6 @@ void SILGenFunction::emitDistributedThunk(SILDeclRef thunk) {
 
     auto *selfTyDecl = FunctionDC->getParent()->getSelfNominalTypeDecl();
     assert(selfTyDecl && "distributed function declared outside of actor");
-
-//    auto selfMetatype = getLoweredType(selfTyDecl->getInterfaceType());
-//    SILValue metatypeValue = B.createMetatype(loc, selfMetatype);
 
     auto remoteFnDecl = selfTyDecl->lookupDirectRemoteFunc(fd);
     assert(remoteFnDecl && "Could not find _remote_<dist_func_name> function");
@@ -2068,13 +2068,12 @@ void SILGenFunction::emitDistributedThunk(SILDeclRef thunk) {
     auto subs = F.getForwardingSubstitutionMap();
 
     SmallVector<SILValue, 8> remoteParams(params);
-//     remoteParams.emplace_back(metatypeValue);
 
-    // B.createTryApply(loc, remoteFn, subs, params, remoteReturnBB, remoteErrorBB);
     B.createTryApply(loc, remoteFn, subs, remoteParams, remoteReturnBB, remoteErrorBB);
   }
 
-  // else {
+  // // else
+  // {
   //   return (try)? (await)? self.X(...)
   // }
   {
@@ -2390,6 +2389,8 @@ void SILGenFunction::emitForeignToNativeThunk(SILDeclRef thunk) {
         foreignError,
         foreignAsync,
         ImportAsMemberStatus());
+    calleeTypeInfo.origFormalType =
+        foreignCI.FormalPattern.getFunctionResultType();
 
     auto init = indirectResult
                 ? useBufferAsTemporary(indirectResult,

@@ -24,7 +24,7 @@ bool swift::checkOperandOwnershipInvariants(const Operand *operand) {
   OperandOwnership opOwnership = operand->getOperandOwnership();
   if (opOwnership == OperandOwnership::Borrow) {
     // Must be a valid BorrowingOperand.
-    return bool(BorrowingOperand::get(operand));
+    return bool(BorrowingOperand(const_cast<Operand *>(operand)));
   }
   return true;
 }
@@ -759,18 +759,20 @@ BUILTIN_OPERAND_OWNERSHIP(InstantaneousUse, TypePtrAuthDiscriminator)
 BUILTIN_OPERAND_OWNERSHIP(InstantaneousUse, IntInstrprofIncrement)
 BUILTIN_OPERAND_OWNERSHIP(DestroyingConsume, StartAsyncLet)
 BUILTIN_OPERAND_OWNERSHIP(DestroyingConsume, EndAsyncLet)
+BUILTIN_OPERAND_OWNERSHIP(DestroyingConsume, StartAsyncLetWithLocalBuffer)
+BUILTIN_OPERAND_OWNERSHIP(DestroyingConsume, EndAsyncLetLifetime)
 BUILTIN_OPERAND_OWNERSHIP(InstantaneousUse, CreateTaskGroup)
 BUILTIN_OPERAND_OWNERSHIP(InstantaneousUse, DestroyTaskGroup)
 
 BUILTIN_OPERAND_OWNERSHIP(ForwardingConsume, COWBufferForReading)
 BUILTIN_OPERAND_OWNERSHIP(ForwardingConsume, UnsafeGuaranteed)
 
-const int PARAMETER_INDEX_CREATE_ASYNC_TASK_FUTURE_FUNCTION = 3;
-const int PARAMETER_INDEX_CREATE_ASYNC_TASK_GROUP_FUTURE_FUNCTION = 4;
+const int PARAMETER_INDEX_CREATE_ASYNC_TASK_FUTURE_FUNCTION = 2;
+const int PARAMETER_INDEX_CREATE_ASYNC_TASK_GROUP_FUTURE_FUNCTION = 3;
 
 OperandOwnership
-OperandOwnershipBuiltinClassifier::visitCreateAsyncTaskFuture(BuiltinInst *bi,
-                                                              StringRef attr) {
+OperandOwnershipBuiltinClassifier::visitCreateAsyncTask(BuiltinInst *bi,
+                                                        StringRef attr) {
   // The function operand is consumed by the new task.
   if (&op == &bi->getOperandRef(PARAMETER_INDEX_CREATE_ASYNC_TASK_FUTURE_FUNCTION))
     return OperandOwnership::DestroyingConsume;
@@ -783,8 +785,8 @@ OperandOwnershipBuiltinClassifier::visitCreateAsyncTaskFuture(BuiltinInst *bi,
 }
 
 OperandOwnership
-OperandOwnershipBuiltinClassifier::visitCreateAsyncTaskGroupFuture(BuiltinInst *bi,
-                                                                   StringRef attr) {
+OperandOwnershipBuiltinClassifier::visitCreateAsyncTaskInGroup(BuiltinInst *bi,
+                                                               StringRef attr) {
   // The function operand is consumed by the new task.
   if (&op == &bi->getOperandRef(PARAMETER_INDEX_CREATE_ASYNC_TASK_GROUP_FUTURE_FUNCTION))
     return OperandOwnership::DestroyingConsume;

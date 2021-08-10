@@ -18,6 +18,7 @@
 #include "swift/Option/Options.h"
 #include "swift/Option/SanitizerOptions.h"
 #include "swift/Strings.h"
+#include "swift/SymbolGraphGen/SymbolGraphOptions.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Option/Arg.h"
@@ -27,6 +28,7 @@
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
+#include "llvm/Support/WithColor.h"
 
 using namespace swift;
 using namespace llvm::opt;
@@ -420,6 +422,12 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
   Opts.EnableExperimentalConcurrency |=
     Args.hasArg(OPT_enable_experimental_concurrency);
 
+  Opts.EnableExperimentalNamedOpaqueTypes |=
+      Args.hasArg(OPT_enable_experimental_named_opaque_types);
+
+  Opts.EnableExperimentalStructuralOpaqueTypes |=
+      Args.hasArg(OPT_enable_experimental_structural_opaque_types);
+
   Opts.EnableExperimentalDistributed |=
     Args.hasArg(OPT_enable_experimental_distributed);
 
@@ -807,12 +815,25 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
     }
   }
 
-  Opts.EnableRequirementMachine = Args.hasFlag(
-      OPT_enable_requirement_machine,
-      OPT_disable_requirement_machine, /*default=*/false);
+  if (auto A =
+          Args.getLastArg(OPT_requirement_machine_EQ)) {
+    auto value = llvm::StringSwitch<Optional<RequirementMachineMode>>(A->getValue())
+      .Case("off", RequirementMachineMode::Disabled)
+      .Case("on", RequirementMachineMode::Enabled)
+      .Case("verify", RequirementMachineMode::Verify)
+      .Default(None);
+
+    if (value)
+      Opts.EnableRequirementMachine = *value;
+    else
+      Diags.diagnose(SourceLoc(), diag::error_invalid_arg_value,
+                     A->getAsString(Args), A->getValue());
+  }
 
   Opts.DebugRequirementMachine = Args.hasArg(
       OPT_debug_requirement_machine);
+  Opts.AnalyzeRequirementMachine = Args.hasArg(
+      OPT_analyze_requirement_machine);
 
   if (const Arg *A = Args.getLastArg(OPT_requirement_machine_step_limit)) {
     unsigned limit;
@@ -1016,6 +1037,28 @@ static bool ParseClangImporterArgs(ClangImporterOptions &Opts,
   return false;
 }
 
+static void ParseSymbolGraphArgs(symbolgraphgen::SymbolGraphOptions &Opts,
+                                 ArgList &Args,
+                                 DiagnosticEngine &Diags,
+                                 LangOptions &LangOpts) {
+  using namespace options;
+
+  if (const Arg *A = Args.getLastArg(OPT_emit_symbol_graph_dir)) {
+    Opts.OutputDir = A->getValue();
+  }
+
+  Opts.Target = LangOpts.Target;
+
+  Opts.SkipInheritedDocs = Args.hasArg(OPT_skip_inherited_docs);
+  Opts.IncludeSPISymbols = Args.hasArg(OPT_include_spi_symbols);
+
+  // default values for generating symbol graphs during a build
+  Opts.MinimumAccessLevel = AccessLevel::Public;
+  Opts.PrettyPrint = false;
+  Opts.EmitSynthesizedMembers = true;
+  Opts.PrintMessages = false;
+}
+
 static bool ParseSearchPathArgs(SearchPathOptions &Opts,
                                 ArgList &Args,
                                 DiagnosticEngine &Diags,
@@ -1060,9 +1103,6 @@ static bool ParseSearchPathArgs(SearchPathOptions &Opts,
   Opts.DisableModulesValidateSystemDependencies |=
       Args.hasArg(OPT_disable_modules_validate_system_headers);
 
-  for (auto A: Args.filtered(OPT_swift_module_file)) {
-    Opts.ExplicitSwiftModules.push_back(resolveSearchPath(A->getValue()));
-  }
   if (const Arg *A = Args.getLastArg(OPT_explict_swift_module_map))
     Opts.ExplicitSwiftModuleMap = A->getValue();
   for (auto A: Args.filtered(OPT_candidate_module_file)) {
@@ -1357,6 +1397,16 @@ static bool ParseSILArgs(SILOptions &Opts, ArgList &Args,
   if (const Arg *A = Args.getLastArg(OPT_save_optimization_record_path))
     Opts.OptRecordFile = A->getValue();
 
+  // If any of the '-g<kind>', except '-gnone', is given,
+  // tell the SILPrinter to print debug info as well
+  if (const Arg *A = Args.getLastArg(OPT_g_Group)) {
+    if (!A->getOption().matches(options::OPT_gnone))
+      Opts.PrintDebugInfo = true;
+  }
+
+  if (Args.hasArg(OPT_legacy_gsil))
+    llvm::WithColor::warning() << "'-gsil' is deprecated, "
+                               << "use '-sil-based-debuginfo' instead\n";
   if (Args.hasArg(OPT_debug_on_sil)) {
     // Derive the name of the SIL file for debugging from
     // the regular outputfile.
@@ -1970,6 +2020,8 @@ bool CompilerInvocation::parseArgs(
     return true;
   }
 
+  ParseSymbolGraphArgs(SymbolGraphOpts, ParsedArgs, Diags, LangOpts);
+
   if (ParseSearchPathArgs(SearchPathOpts, ParsedArgs, Diags,
                           workingDirectory)) {
     return true;
@@ -2067,31 +2119,4 @@ CompilerInvocation::setUpInputForSILTool(
     getFrontendOptions().InputMode = FrontendOptions::ParseInputMode::SIL;
   }
   return fileBufOrErr;
-}
-
-bool CompilerInvocation::isModuleExternallyConsumed(
-    const ModuleDecl *mod) const {
-  // Modules for executables aren't expected to be consumed by other modules.
-  // This picks up all kinds of entrypoints, including script mode,
-  // @UIApplicationMain and @NSApplicationMain.
-  if (mod->hasEntryPoint()) {
-    return false;
-  }
-
-  // If an implicit Objective-C header was needed to construct this module, it
-  // must be the product of a library target.
-  if (!getFrontendOptions().ImplicitObjCHeaderPath.empty()) {
-    return false;
-  }
-
-  // App extensions are special beasts because they build without entrypoints
-  // like library targets, but they behave like executable targets because
-  // their associated modules are not suitable for distribution.
-  if (mod->getASTContext().LangOpts.EnableAppExtensionRestrictions) {
-    return false;
-  }
-
-  // FIXME: This is still a lousy approximation of whether the module file will
-  // be externally consumed.
-  return true;
 }

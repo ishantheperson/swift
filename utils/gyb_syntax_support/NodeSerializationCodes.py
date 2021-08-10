@@ -253,6 +253,7 @@ SYNTAX_NODE_SERIALIZATION_CODES = {
     'PoundFileIDExpr': 247,
     'TargetFunctionEntry': 248,
     'PostfixIfConfigExpr': 250,
+    'UnavailabilityCondition': 251,
 }
 
 

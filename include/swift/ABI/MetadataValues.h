@@ -48,13 +48,13 @@ enum {
   NumWords_DefaultActor = 12,
 
   /// The number of words in a task.
-  NumWords_AsyncTask = 16,
+  NumWords_AsyncTask = 24,
 
   /// The number of words in a task group.
   NumWords_TaskGroup = 32,
 
-  /// The number of words in an AsyncLet (flags + task pointer)
-  NumWords_AsyncLet = 8, // TODO: not sure how much is enough, these likely could be pretty small
+  /// The number of words in an AsyncLet (flags + child task context & allocation)
+  NumWords_AsyncLet = 80, // 640 bytes ought to be enough for anyone
 };
 
 struct InProcess;
@@ -2022,6 +2022,43 @@ enum class JobPriority : size_t {
   Unspecified     = 0x00,
 };
 
+/// Flags for task creation.
+class TaskCreateFlags : public FlagSet<size_t> {
+public:
+  enum {
+    Priority       = 0,
+    Priority_width = 8,
+
+    Task_IsChildTask                              = 8,
+    // bit 9 is unused
+    Task_CopyTaskLocals                           = 10,
+    Task_InheritContext                           = 11,
+    Task_EnqueueJob                               = 12,
+    Task_AddPendingGroupTaskUnconditionally       = 13,
+  };
+
+  explicit constexpr TaskCreateFlags(size_t bits) : FlagSet(bits) {}
+  constexpr TaskCreateFlags() {}
+
+  FLAGSET_DEFINE_FIELD_ACCESSORS(Priority, Priority_width, JobPriority,
+                                 getPriority, setPriority)
+  FLAGSET_DEFINE_FLAG_ACCESSORS(Task_IsChildTask,
+                                isChildTask,
+                                setIsChildTask)
+  FLAGSET_DEFINE_FLAG_ACCESSORS(Task_CopyTaskLocals,
+                                copyTaskLocals,
+                                setCopyTaskLocals)
+  FLAGSET_DEFINE_FLAG_ACCESSORS(Task_InheritContext,
+                                inheritContext,
+                                setInheritContext)
+  FLAGSET_DEFINE_FLAG_ACCESSORS(Task_EnqueueJob,
+                                enqueueJob,
+                                setEnqueueJob)
+  FLAGSET_DEFINE_FLAG_ACCESSORS(Task_AddPendingGroupTaskUnconditionally,
+                                addPendingGroupTaskUnconditionally,
+                                setAddPendingGroupTaskUnconditionally)
+};
+
 /// Flags for schedulable jobs.
 class JobFlags : public FlagSet<uint32_t> {
 public:
@@ -2039,7 +2076,7 @@ public:
     Task_IsChildTask           = 24,
     Task_IsFuture              = 25,
     Task_IsGroupChildTask      = 26,
-    Task_IsContinuingAsyncTask = 27,
+    // 27 is currently unused
     Task_IsAsyncLetTask        = 28,
   };
 
@@ -2070,9 +2107,6 @@ public:
   FLAGSET_DEFINE_FLAG_ACCESSORS(Task_IsGroupChildTask,
                                 task_isGroupChildTask,
                                 task_setIsGroupChildTask)
-  FLAGSET_DEFINE_FLAG_ACCESSORS(Task_IsContinuingAsyncTask,
-                                task_isContinuingAsyncTask,
-                                task_setIsContinuingAsyncTask)
   FLAGSET_DEFINE_FLAG_ACCESSORS(Task_IsAsyncLetTask,
                                 task_isAsyncLetTask,
                                 task_setIsAsyncLetTask)
@@ -2111,6 +2145,11 @@ enum class TaskOptionRecordKind : uint8_t {
   Executor  = 0,
   /// Request a child task to be part of a specific task group.
   TaskGroup = 1,
+  /// DEPRECATED. AsyncLetWithBuffer is used instead.
+  /// Request a child task for an 'async let'.
+  AsyncLet  = 2,
+  /// Request a child task for an 'async let'.
+  AsyncLetWithBuffer = 3,
 };
 
 /// Flags for cancellation records.
@@ -2175,7 +2214,10 @@ public:
     Kind_width          = 8,
 
     CanThrow            = 8,
-    ShouldNotDeallocate = 9
+
+    // Kind-specific flags should grow down from 31.
+
+    Continuation_IsExecutorSwitchForced = 31,
   };
 
   explicit AsyncContextFlags(uint32_t bits) : FlagSet(bits) {}
@@ -2191,17 +2233,10 @@ public:
   /// Whether this context is permitted to throw.
   FLAGSET_DEFINE_FLAG_ACCESSORS(CanThrow, canThrow, setCanThrow)
 
-  /// Whether a function should avoid deallocating its context before
-  /// returning.  It should still pass its caller's context to its
-  /// return continuation.
-  ///
-  /// This flag can be set in the caller to optimize context allocation,
-  /// e.g. if the callee's context size is known statically and simply
-  /// allocated as part of the caller's context, or if the callee will
-  /// be called multiple times.
-  FLAGSET_DEFINE_FLAG_ACCESSORS(ShouldNotDeallocate,
-                                shouldNotDeallocateInCallee,
-                                setShouldNotDeallocateInCallee)
+  /// See AsyncContinuationFlags::isExecutorSwitchForced.
+  FLAGSET_DEFINE_FLAG_ACCESSORS(Continuation_IsExecutorSwitchForced,
+                                continuation_isExecutorSwitchForced,
+                                continuation_setIsExecutorSwitchForced)
 };
 
 /// Flags passed to swift_continuation_init.
@@ -2211,6 +2246,7 @@ public:
     CanThrow            = 0,
     HasExecutorOverride = 1,
     IsPreawaited        = 2,
+    IsExecutorSwitchForced = 3,
   };
 
   explicit AsyncContinuationFlags(size_t bits) : FlagSet(bits) {}
@@ -2226,10 +2262,27 @@ public:
                                 hasExecutorOverride,
                                 setHasExecutorOverride)
 
+  /// Whether the switch to the target executor should be forced
+  /// by swift_continuation_await.  If this is not set, and
+  /// swift_continuation_await finds that the continuation has
+  /// already been resumed, then execution will continue on the
+  /// current executor.  This has no effect in combination with
+  /// pre-awaiting.
+  ///
+  /// Setting this flag when you know statically that you're
+  /// already on the right executor is suboptimal.  In particular,
+  /// there's no good reason to set this if you're not also using
+  /// an executor override.
+  FLAGSET_DEFINE_FLAG_ACCESSORS(IsExecutorSwitchForced,
+                                isExecutorSwitchForced,
+                                setIsExecutorSwitchForced)
+
   /// Whether the continuation is "pre-awaited".  If so, it should
   /// be set up in the already-awaited state, and so resumptions
   /// will immediately schedule the continuation to begin
-  /// asynchronously.
+  /// asynchronously.  The continuation must not be subsequently
+  /// awaited if this is set.  The task is immediately treated as
+  /// suspended.
   FLAGSET_DEFINE_FLAG_ACCESSORS(IsPreawaited,
                                 isPreawaited,
                                 setIsPreawaited)

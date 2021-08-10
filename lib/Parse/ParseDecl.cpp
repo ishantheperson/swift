@@ -570,7 +570,7 @@ ParserResult<AvailableAttr> Parser::parseExtendedAvailabilitySpecList(
   auto Attr = new (Context)
   AvailableAttr(AtLoc, SourceRange(AttrLoc, Tok.getLoc()),
                 PlatformKind.getValue(),
-                Message, Renamed,
+                Message, Renamed, /*RenameDecl=*/nullptr,
                 Introduced.Version, Introduced.Range,
                 Deprecated.Version, Deprecated.Range,
                 Obsoleted.Version, Obsoleted.Range,
@@ -1577,70 +1577,6 @@ void Parser::parseAllAvailabilityMacroArguments() {
   AvailabilityMacrosComputed = true;
 }
 
-static CompletionHandlerAsyncAttr *
-parseCompletionHandlerAsyncAttribute(Parser &P, StringRef AttrName,
-                                     SourceLoc AtLoc, DeclAttrKind DK) {
-  SourceLoc Loc = P.PreviousLoc;
-
-  if (!P.consumeIf(tok::l_paren)) {
-    P.diagnose(P.getEndOfPreviousLoc(), diag::attr_expected_lparen, AttrName,
-               DeclAttribute::isDeclModifier(DK));
-    return nullptr;
-  }
-
-  if (!P.Tok.is(tok::string_literal)) {
-    P.diagnose(Loc, diag::attr_expected_string_literal, AttrName);
-    return nullptr;
-  }
-
-  SourceLoc nameLoc = P.Tok.getLoc();
-  Optional<StringRef> asyncFunctionName = P.getStringLiteralIfNotInterpolated(
-      nameLoc, ("argument of '" + AttrName + "'").str());
-  P.consumeToken(tok::string_literal);
-
-  if (!asyncFunctionName)
-    return nullptr;
-
-  ParsedDeclName parsedAsyncName = parseDeclName(*asyncFunctionName);
-  if (!parsedAsyncName || !parsedAsyncName.ContextName.empty()) {
-    P.diagnose(nameLoc, diag::attr_completion_handler_async_invalid_name,
-               AttrName);
-    return nullptr;
-  }
-
-  size_t handlerIndex = 0;
-  SourceLoc handlerIndexLoc = SourceLoc();
-  if (P.consumeIf(tok::comma)) {
-    // The completion handler is explicitly specified, parse it
-    if (P.parseSpecificIdentifier("completionHandlerIndex",
-                                  diag::attr_missing_label,
-                                  "completionHandlerIndex", AttrName) ||
-        P.parseToken(tok::colon, diag::expected_colon_after_label,
-                     "completionHandlerIndex")) {
-      return nullptr;
-    }
-
-    if (P.Tok.getText().getAsInteger(0, handlerIndex)) {
-      P.diagnose(P.Tok.getLoc(), diag::attr_expected_integer_literal, AttrName);
-      return nullptr;
-    }
-
-    handlerIndexLoc = P.consumeToken(tok::integer_literal);
-  }
-
-  SourceRange AttrRange = SourceRange(Loc, P.Tok.getRange().getStart());
-  if (!P.consumeIf(tok::r_paren)) {
-    P.diagnose(P.getEndOfPreviousLoc(), diag::attr_expected_rparen, AttrName,
-               DeclAttribute::isDeclModifier(DK));
-    return nullptr;
-  }
-
-  return new (P.Context) CompletionHandlerAsyncAttr(
-      parsedAsyncName.formDeclNameRef(P.Context), nameLoc,
-      handlerIndex, handlerIndexLoc, AtLoc,
-      AttrRange);
-}
-
 bool Parser::parseNewDeclAttribute(DeclAttributes &Attributes, SourceLoc AtLoc,
                                    DeclAttrKind DK, bool isFromClangAttribute) {
   // Ok, it is a valid attribute, eat it, and then process it.
@@ -2296,7 +2232,8 @@ bool Parser::parseNewDeclAttribute(DeclAttributes &Attributes, SourceLoc AtLoc,
          peekAvailabilityMacroName())) {
       // We have the short form of available: @available(iOS 8.0.1, *)
       SmallVector<AvailabilitySpec *, 5> Specs;
-      ParserStatus Status = parseAvailabilitySpecList(Specs);
+      ParserStatus Status = parseAvailabilitySpecList(Specs, 
+                                    AvailabilitySpecSource::Available);
 
       if (Status.isErrorOrHasCompletion())
         return false;
@@ -2361,6 +2298,7 @@ bool Parser::parseNewDeclAttribute(DeclAttributes &Attributes, SourceLoc AtLoc,
                                      Platform,
                                      /*Message=*/StringRef(),
                                      /*Rename=*/StringRef(),
+                                     /*RenameDecl=*/nullptr,
                                      /*Introduced=*/Version,
                                      /*IntroducedRange=*/VersionRange,
                                      /*Deprecated=*/llvm::VersionTuple(),
@@ -2682,19 +2620,6 @@ bool Parser::parseNewDeclAttribute(DeclAttributes &Attributes, SourceLoc AtLoc,
 
     Attributes.add(new (Context) ProjectedValuePropertyAttr(
         name, AtLoc, range, /*implicit*/ false));
-    break;
-  }
-  case DAK_CompletionHandlerAsync: {
-    auto *attr =
-        parseCompletionHandlerAsyncAttribute(*this, AttrName, AtLoc, DK);
-    if (!attr) {
-      skipUntilDeclStmtRBrace(tok::r_paren);
-      consumeIf(tok::r_paren);
-      return false;
-    }
-
-    if (!DiscardAttribute)
-      Attributes.add(attr);
     break;
   }
   }
@@ -4800,9 +4725,9 @@ ParserResult<ImportDecl> Parser::parseDeclImport(ParseDeclOptions Flags,
 ///     'class'
 ///     type-identifier
 /// \endverbatim
-ParserStatus Parser::parseInheritance(SmallVectorImpl<TypeLoc> &Inherited,
-                                      bool allowClassRequirement,
-                                      bool allowAnyObject) {
+ParserStatus Parser::parseInheritance(
+    SmallVectorImpl<InheritedEntry> &Inherited,
+    bool allowClassRequirement, bool allowAnyObject) {
   SyntaxParsingContext InheritanceContext(SyntaxContext,
                                           SyntaxKind::TypeInheritanceClause);
 
@@ -4862,8 +4787,10 @@ ParserStatus Parser::parseInheritance(SmallVectorImpl<TypeLoc> &Inherited,
 
       // Add 'AnyObject' to the inherited list.
       Inherited.push_back(
-        new (Context) SimpleIdentTypeRepr(DeclNameLoc(classLoc), DeclNameRef(
-                                          Context.getIdentifier("AnyObject"))));
+        InheritedEntry(
+            new (Context) SimpleIdentTypeRepr(
+                DeclNameLoc(classLoc),
+                DeclNameRef(Context.getIdentifier("AnyObject")))));
       continue;
     }
 
@@ -4872,7 +4799,7 @@ ParserStatus Parser::parseInheritance(SmallVectorImpl<TypeLoc> &Inherited,
 
     // Record the type if its a single type.
     if (ParsedTypeResult.isNonNull())
-      Inherited.push_back(ParsedTypeResult.get());
+      Inherited.push_back(InheritedEntry(ParsedTypeResult.get()));
   } while (HasNextType);
 
   return Status;
@@ -5187,7 +5114,7 @@ Parser::parseDeclExtension(ParseDeclOptions Flags, DeclAttributes &Attributes) {
   status |= extendedType;
 
   // Parse optional inheritance clause.
-  SmallVector<TypeLoc, 2> Inherited;
+  SmallVector<InheritedEntry, 2> Inherited;
   if (Tok.is(tok::colon))
     status |= parseInheritance(Inherited,
                                /*allowClassRequirement=*/false,
@@ -5625,7 +5552,7 @@ ParserResult<TypeDecl> Parser::parseDeclAssociatedType(Parser::ParseDeclOptions 
   
   // Parse optional inheritance clause.
   // FIXME: Allow class requirements here.
-  SmallVector<TypeLoc, 2> Inherited;
+  SmallVector<InheritedEntry, 2> Inherited;
   if (Tok.is(tok::colon))
     Status |= parseInheritance(Inherited,
                                /*allowClassRequirement=*/false,
@@ -7211,7 +7138,7 @@ ParserResult<EnumDecl> Parser::parseDeclEnum(ParseDeclOptions Flags,
 
   // Parse optional inheritance clause within the context of the enum.
   if (Tok.is(tok::colon)) {
-    SmallVector<TypeLoc, 2> Inherited;
+    SmallVector<InheritedEntry, 2> Inherited;
     Status |= parseInheritance(Inherited,
                                /*allowClassRequirement=*/false,
                                /*allowAnyObject=*/false);
@@ -7487,7 +7414,7 @@ ParserResult<StructDecl> Parser::parseDeclStruct(ParseDeclOptions Flags,
 
   // Parse optional inheritance clause within the context of the struct.
   if (Tok.is(tok::colon)) {
-    SmallVector<TypeLoc, 2> Inherited;
+    SmallVector<InheritedEntry, 2> Inherited;
     Status |= parseInheritance(Inherited,
                                /*allowClassRequirement=*/false,
                                /*allowAnyObject=*/false);
@@ -7581,7 +7508,7 @@ ParserResult<ClassDecl> Parser::parseDeclClass(ParseDeclOptions Flags,
 
   // Parse optional inheritance clause within the context of the class.
   if (Tok.is(tok::colon)) {
-    SmallVector<TypeLoc, 2> Inherited;
+    SmallVector<InheritedEntry, 2> Inherited;
     Status |= parseInheritance(Inherited,
                                /*allowClassRequirement=*/false,
                                /*allowAnyObject=*/false);
@@ -7678,7 +7605,7 @@ parseDeclProtocol(ParseDeclOptions Flags, DeclAttributes &Attributes) {
   DebuggerContextChange DCC (*this);
   
   // Parse optional inheritance clause.
-  SmallVector<TypeLoc, 4> InheritedProtocols;
+  SmallVector<InheritedEntry, 4> InheritedProtocols;
   SourceLoc colonLoc;
   if (Tok.is(tok::colon)) {
     colonLoc = Tok.getLoc();
@@ -8191,8 +8118,8 @@ Parser::parseDeclOperatorImpl(SourceLoc OperatorLoc, Identifier Name,
   // designated protocol. These both look like identifiers, so we
   // parse them both as identifiers here and sort it out in type
   // checking.
-  SourceLoc colonLoc;
-  SmallVector<Located<Identifier>, 4> identifiers;
+  SourceLoc colonLoc, groupLoc;
+  Identifier groupName;
   if (Tok.is(tok::colon)) {
     SyntaxParsingContext GroupCtxt(SyntaxContext,
                                    SyntaxKind::OperatorPrecedenceAndTypes);
@@ -8207,43 +8134,40 @@ Parser::parseDeclOperatorImpl(SourceLoc OperatorLoc, Identifier Name,
       return makeParserCodeCompletionResult<OperatorDecl>();
     }
 
+    SyntaxParsingContext ListCtxt(SyntaxContext, SyntaxKind::IdentifierList);
+
+    (void)parseIdentifier(groupName, groupLoc,
+                          diag::operator_decl_expected_precedencegroup,
+                          /*diagnoseDollarPrefix=*/false);
+
     if (Context.TypeCheckerOpts.EnableOperatorDesignatedTypes) {
-      if (Tok.is(tok::identifier)) {
-        SyntaxParsingContext GroupCtxt(SyntaxContext,
-                                       SyntaxKind::IdentifierList);
+      // Designated types have been removed; consume the list (mainly for source
+      // compatibility with old swiftinterfaces) and emit a warning.
 
-        Identifier name;
-        auto loc = consumeIdentifier(name, /*diagnoseDollarPrefix=*/false);
-        identifiers.emplace_back(name, loc);
-
-        while (Tok.is(tok::comma)) {
-          auto comma = consumeToken();
-
-          if (Tok.is(tok::identifier)) {
-            Identifier name;
-            auto loc = consumeIdentifier(name, /*diagnoseDollarPrefix=*/false);
-            identifiers.emplace_back(name, loc);
-          } else {
-            if (Tok.isNot(tok::eof)) {
-              auto otherTokLoc = consumeToken();
-              diagnose(otherTokLoc, diag::operator_decl_expected_type);
-            } else {
-              diagnose(comma, diag::operator_decl_trailing_comma);
-            }
-          }
-        }
-      }
-    } else if (Tok.is(tok::identifier)) {
-      SyntaxParsingContext GroupCtxt(SyntaxContext,
-                                     SyntaxKind::IdentifierList);
-
-      Identifier name;
-      auto nameLoc = consumeIdentifier(name, /*diagnoseDollarPrefix=*/false);
-      identifiers.emplace_back(name, nameLoc);
+      // These SourceLocs point to the ends of the designated type list. If
+      // `typesEndLoc` never becomes valid, we didn't find any designated types.
+      SourceLoc typesStartLoc = Tok.getLoc();
+      SourceLoc typesEndLoc;
 
       if (isPrefix || isPostfix) {
+        // These have no precedence group, so we already parsed the first entry
+        // in the designated types list. Retroactively include it in the range.
+        typesStartLoc = colonLoc;
+        typesEndLoc = groupLoc;
+      }
+
+      while (consumeIf(tok::comma, typesEndLoc)) {
+        if (Tok.isNot(tok::eof))
+          typesEndLoc = consumeToken();
+      }
+
+      if (typesEndLoc.isValid())
+        diagnose(typesStartLoc, diag::operator_decl_remove_designated_types)
+            .fixItRemove({typesStartLoc, typesEndLoc});
+    } else {
+      if (isPrefix || isPostfix) {
         diagnose(colonLoc, diag::precedencegroup_not_infix)
-            .fixItRemove({colonLoc, nameLoc});
+            .fixItRemove({colonLoc, groupLoc});
       }
       // Nothing to complete here, simply consume the token.
       if (Tok.is(tok::code_complete))
@@ -8259,10 +8183,7 @@ Parser::parseDeclOperatorImpl(SourceLoc OperatorLoc, Identifier Name,
     } else {
       auto Diag = diagnose(lBraceLoc, diag::deprecated_operator_body);
       if (Tok.is(tok::r_brace)) {
-        SourceLoc lastGoodLoc =
-            !identifiers.empty() ? identifiers.back().Loc : SourceLoc();
-        if (lastGoodLoc.isInvalid())
-          lastGoodLoc = NameLoc;
+        SourceLoc lastGoodLoc = groupLoc.isValid() ? groupLoc : NameLoc;
         SourceLoc lastGoodLocEnd = Lexer::getLocForEndOfToken(SourceMgr,
                                                               lastGoodLoc);
         SourceLoc rBraceEnd = Lexer::getLocForEndOfToken(SourceMgr, Tok.getLoc());
@@ -8275,18 +8196,16 @@ Parser::parseDeclOperatorImpl(SourceLoc OperatorLoc, Identifier Name,
   }
 
   OperatorDecl *res;
-  if (Attributes.hasAttribute<PrefixAttr>())
+  if (isPrefix)
     res = new (Context)
-        PrefixOperatorDecl(CurDeclContext, OperatorLoc, Name, NameLoc,
-                           Context.AllocateCopy(identifiers));
-  else if (Attributes.hasAttribute<PostfixAttr>())
+        PrefixOperatorDecl(CurDeclContext, OperatorLoc, Name, NameLoc);
+  else if (isPostfix)
     res = new (Context)
-        PostfixOperatorDecl(CurDeclContext, OperatorLoc, Name, NameLoc,
-                            Context.AllocateCopy(identifiers));
+        PostfixOperatorDecl(CurDeclContext, OperatorLoc, Name, NameLoc);
   else
     res = new (Context)
         InfixOperatorDecl(CurDeclContext, OperatorLoc, Name, NameLoc, colonLoc,
-                          Context.AllocateCopy(identifiers));
+                          groupName, groupLoc);
 
   diagnoseOperatorFixityAttributes(*this, Attributes, res);
 

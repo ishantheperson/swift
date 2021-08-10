@@ -881,10 +881,11 @@ public:
   ///
   /// \returns The imported declaration, or null if this declaration could
   /// not be represented in Swift.
-  Decl *importDeclReal(const clang::NamedDecl *ClangDecl, Version version) {
+  Decl *importDeclReal(const clang::NamedDecl *ClangDecl, Version version,
+                       bool useCanonicalDecl = true) {
     return importDeclAndCacheImpl(ClangDecl, version,
                                   /*SuperfluousTypedefsAreTransparent=*/false,
-                                  /*UseCanonicalDecl*/true);
+                                  /*UseCanonicalDecl*/ useCanonicalDecl);
   }
 
   /// Import a cloned version of the given declaration, which is part of
@@ -1419,6 +1420,11 @@ public:
 
   void loadRequirementSignature(const ProtocolDecl *decl, uint64_t contextData,
                                 SmallVectorImpl<Requirement> &reqs) override {
+    llvm_unreachable("unimplemented for ClangImporter");
+  }
+
+  void loadAssociatedTypes(const ProtocolDecl *decl, uint64_t contextData,
+                           SmallVectorImpl<AssociatedTypeDecl *> &assocTypes) override {
     llvm_unreachable("unimplemented for ClangImporter");
   }
 

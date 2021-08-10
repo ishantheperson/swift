@@ -123,7 +123,8 @@ deriveBodyEquatable_enum_noAssociatedValues_eq(AbstractFunctionDecl *eqDecl,
                                     AccessSemantics::Ordinary, fnType);
 
     fnType = fnType->getResult()->castTo<FunctionType>();
-    auto *callExpr = new (C) DotSyntaxCallExpr(ref, SourceLoc(), base, fnType);
+    auto *callExpr =
+        DotSyntaxCallExpr::create(C, ref, SourceLoc(), base, fnType);
     callExpr->setImplicit();
     callExpr->setThrows(false);
     cmpFuncExpr = callExpr;
@@ -550,6 +551,12 @@ deriveHashable_hashInto(
   hashDecl->copyFormalAccessFrom(derived.Nominal,
                                  /*sourceIsParentContext=*/true);
 
+  // The derived hash(into:) for an actor must be non-isolated.
+  if (derived.Nominal->isActor() ||
+      getActorIsolation(derived.Nominal) == ActorIsolation::GlobalActor) {
+    hashDecl->getAttrs().add(new (C) NonisolatedAttr(/*IsImplicit*/true));
+  }
+
   derived.addMembersToConformanceContext({hashDecl});
 
   return hashDecl;
@@ -903,6 +910,12 @@ static ValueDecl *deriveHashable_hashValue(DerivedConformance &derived) {
   hashValueDecl->setAccessors(SourceLoc(), {getterDecl}, SourceLoc());
   hashValueDecl->copyFormalAccessFrom(derived.Nominal,
                                       /*sourceIsParentContext*/ true);
+
+  // The derived hashValue of an actor must be nonisolated.
+  if (derived.Nominal->isActor() ||
+      getActorIsolation(derived.Nominal) == ActorIsolation::GlobalActor) {
+    hashValueDecl->getAttrs().add(new (C) NonisolatedAttr(/*IsImplicit*/true));
+  }
 
   Pattern *hashValuePat = NamedPattern::createImplicit(C, hashValueDecl);
   hashValuePat->setType(intType);

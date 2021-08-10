@@ -648,6 +648,23 @@ task_group_wait_resume_adapter(SWIFT_ASYNC_CONTEXT AsyncContext *_context) {
   return resumeWithError(context->Parent, context->errorResult);
 }
 
+#ifdef __ARM_ARCH_7K__
+__attribute__((noinline))
+SWIFT_CC(swiftasync) static void workaround_function_swift_taskGroup_wait_next_throwingImpl(
+    OpaqueValue *result, SWIFT_ASYNC_CONTEXT AsyncContext *callerContext,
+    TaskGroup *_group,
+    ThrowingTaskFutureWaitContinuationFunction resumeFunction,
+    AsyncContext *callContext) {
+  // Make sure we don't eliminate calls to this function.
+  asm volatile("" // Do nothing.
+               :  // Output list, empty.
+               : "r"(result), "r"(callerContext), "r"(_group) // Input list.
+               : // Clobber list, empty.
+  );
+  return;
+}
+#endif
+
 // =============================================================================
 // ==== group.next() implementation (wait_next and groupPoll) ------------------
 SWIFT_CC(swiftasync)
@@ -675,7 +692,12 @@ static void swift_taskGroup_wait_next_throwingImpl(
   case PollStatus::MustWait:
     // The waiting task has been queued on the channel,
     // there were pending tasks so it will be woken up eventually.
+#ifdef __ARM_ARCH_7K__
+    return workaround_function_swift_taskGroup_wait_next_throwingImpl(
+        resultPointer, callerContext, _group, resumeFunction, rawContext);
+#else
     return;
+#endif
 
   case PollStatus::Empty:
   case PollStatus::Error:
@@ -706,6 +728,9 @@ PollResult TaskGroupImpl::poll(AsyncTask *waitingTask) {
     return result;
   }
 
+  // Have we suspended the task?
+  bool hasSuspended = false;
+
   auto waitHead = waitQueue.load(std::memory_order_acquire);
 
   // ==== 2) Ready task was polled, return with it immediately -----------------
@@ -720,19 +745,18 @@ PollResult TaskGroupImpl::poll(AsyncTask *waitingTask) {
       // Success! We are allowed to poll.
       ReadyQueueItem item;
       bool taskDequeued = readyQueue.dequeue(item);
-      if (!taskDequeued) {
-        result.status = PollStatus::MustWait;
-        result.storage = nullptr;
-        result.successType = nullptr;
-        result.retainedTask = nullptr;
-        mutex.unlock(); // TODO: remove group lock, and use status for synchronization
-        return result;
+      assert(taskDequeued); (void) taskDequeued;
+
+      // We're going back to running the task, so if we suspended before,
+      // we need to flag it as running again.
+      if (hasSuspended) {
+        waitingTask->flagAsRunning();
       }
 
       assert(item.getTask()->isFuture());
       auto futureFragment = item.getTask()->futureFragment();
 
-      // Store the task in the result, so after we're done processing it it may
+      // Store the task in the result, so after we're done processing it may
       // be swift_release'd; we kept it alive while it was in the readyQueue by
       // an additional retain issued as we enqueued it there.
       result.retainedTask = item.getTask();
@@ -774,6 +798,10 @@ PollResult TaskGroupImpl::poll(AsyncTask *waitingTask) {
   assert(assumed.readyTasks() == 0);
   _swift_tsan_release(static_cast<Job *>(waitingTask));
   while (true) {
+    if (!hasSuspended) {
+      hasSuspended = true;
+      waitingTask->flagAsSuspended();
+    }
     // Put the waiting task at the beginning of the wait queue.
     if (waitQueue.compare_exchange_weak(
         waitHead, waitingTask,
@@ -782,10 +810,10 @@ PollResult TaskGroupImpl::poll(AsyncTask *waitingTask) {
       mutex.unlock(); // TODO: remove fragment lock, and use status for synchronization
       // no ready tasks, so we must wait.
       result.status = PollStatus::MustWait;
+      _swift_task_clearCurrent();
       return result;
     } // else, try again
   }
-  assert(false && "must successfully compare exchange the waiting task.");
 }
 
 // =============================================================================

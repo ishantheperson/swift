@@ -125,11 +125,15 @@ bool SemaAnnotator::walkToDeclPre(Decl *D) {
   bool IsExtension = false;
 
   if (auto *VD = dyn_cast<ValueDecl>(D)) {
-    if (VD->hasName() && !VD->isImplicit()) {
+    if (!VD->isImplicit()) {
       SourceManager &SM = VD->getASTContext().SourceMgr;
-      NameLen = VD->getBaseName().userFacingName().size();
-      if (Loc.isValid() && SM.extractText({Loc, 1}) == "`")
-        NameLen += 2;
+      if (VD->hasName()) {
+        NameLen = VD->getBaseName().userFacingName().size();
+        if (Loc.isValid() && SM.extractText({Loc, 1}) == "`")
+          NameLen += 2;
+      } else if (Loc.isValid() && SM.extractText({Loc, 1}) == "_") {
+        NameLen = 1;
+      }
     }
 
     auto ReportParamList = [&](ParameterList *PL) {
@@ -271,6 +275,21 @@ std::pair<bool, Expr *> SemaAnnotator::walkToExprPre(Expr *E) {
     return { false, E };
   }
 
+  auto doStopTraversal = [&]() -> std::pair<bool, Expr *> {
+    Cancelled = true;
+    return { false, nullptr };
+  };
+
+  // Skip the synthesized curry thunks and just walk over the unwrapped
+  // expression
+  if (auto *ACE = dyn_cast<AutoClosureExpr>(E)) {
+    if (auto *SubExpr = ACE->getUnwrappedCurryThunkExpr()) {
+      if (!SubExpr->walk(*this))
+        return doStopTraversal();
+      return { false, E };
+    }
+  }
+
   if (!SEWalker.walkToExprPre(E)) {
     return { false, E };
   }
@@ -287,29 +306,8 @@ std::pair<bool, Expr *> SemaAnnotator::walkToExprPre(Expr *E) {
     return { false, E };
   };
 
-  auto doStopTraversal = [&]() -> std::pair<bool, Expr *> {
-    Cancelled = true;
-    return { false, nullptr };
-  };
-
   if (auto *CtorRefE = dyn_cast<ConstructorRefCallExpr>(E))
     CtorRefs.push_back(CtorRefE);
-
-  if (auto *ACE = dyn_cast<AutoClosureExpr>(E)) {
-    if (auto *SubExpr = ACE->getUnwrappedCurryThunkExpr()) {
-      if (auto *DRE = dyn_cast<DeclRefExpr>(SubExpr)) {
-        if (!passReference(DRE->getDecl(), DRE->getType(),
-                           DRE->getNameLoc(),
-                           ReferenceMetaData(getReferenceKind(Parent.getAsExpr(), DRE),
-                                             OpAccess)))
-          return doStopTraversal();
-
-        return doSkipChildren();
-      }
-    }
-
-    return { true, E };
-  }
 
   if (auto *DRE = dyn_cast<DeclRefExpr>(E)) {
     auto *FD = dyn_cast<FuncDecl>(DRE->getDecl());
@@ -435,6 +433,7 @@ std::pair<bool, Expr *> SemaAnnotator::walkToExprPre(Expr *E) {
       case KeyPathExpr::Component::Kind::OptionalForce:
       case KeyPathExpr::Component::Kind::Identity:
       case KeyPathExpr::Component::Kind::DictionaryKey:
+      case KeyPathExpr::Component::Kind::CodeCompletion:
         break;
       }
     }

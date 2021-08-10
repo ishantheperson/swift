@@ -1818,7 +1818,7 @@ public:
 
       SmallVector<AnyFunctionType::Param, 8> Args;
       Type InputExprTy = E->getArg()->getType();
-      AnyFunctionType::decomposeInput(InputExprTy, Args);
+      AnyFunctionType::decomposeTuple(InputExprTy, Args);
       auto Params = FT->getParams();
       if (!equalParamsIgnoringIsolation(Args, Params)) {
         Out << "Argument type does not match parameter type in ApplyExpr:"
@@ -2023,6 +2023,15 @@ public:
         abort();
       }
 
+      verifyCheckedBase(E);
+    }
+
+    void verifyChecked(ParenExpr *E) {
+      PrettyStackTraceExpr debugStack(Ctx, "verifying ParenExpr", E);
+      if (!isa<ParenType>(E->getType().getPointer())) {
+        Out << "ParenExpr not of ParenType\n";
+        abort();
+      }
       verifyCheckedBase(E);
     }
 
@@ -2347,12 +2356,6 @@ public:
     }
 
     void verifyChecked(ValueDecl *VD) {
-    if (VD->getName().isSimpleName()  &&
-          !VD->getName().isSpecial() &&
-          VD->getName().getBaseIdentifier().str() == "echo") {
-        VD->dump();
-      }
-
       if (VD->getInterfaceType()->hasError()) {
         Out << "checked decl cannot have error type\n";
         VD->dump(Out);

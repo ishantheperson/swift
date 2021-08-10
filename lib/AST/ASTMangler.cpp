@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2020 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -209,9 +209,11 @@ std::string ASTMangler::mangleWitnessTable(const RootProtocolConformance *C) {
   if (isa<NormalProtocolConformance>(C)) {
     appendProtocolConformance(C);
     appendOperator("WP");
-  } else {
+  } else if (isa<SelfProtocolConformance>(C)) {
     appendProtocolName(cast<SelfProtocolConformance>(C)->getProtocol());
     appendOperator("WS");
+  } else {
+    llvm_unreachable("mangling unknown conformance kind");
   }
   return finalize();
 }
@@ -235,7 +237,11 @@ std::string ASTMangler::mangleWitnessThunk(
   }
 
   if (Conformance) {
-    appendOperator(isa<SelfProtocolConformance>(Conformance) ? "TS" : "TW");
+    if (isa<SelfProtocolConformance>(Conformance)) {
+      appendOperator("TS");
+    } else {
+      appendOperator("TW");
+    }
   }
   return finalize();
 }
@@ -1126,6 +1132,12 @@ void ASTMangler::appendType(Type type, const ValueDecl *forDecl) {
       appendOperator("XSa");
       return;
 
+    case TypeKind::VariadicSequence:
+      assert(DWARFMangling && "sugared types are only legal for the debugger");
+      appendType(cast<VariadicSequenceType>(tybase)->getBaseType());
+      appendOperator("XSa");
+      return;
+
     case TypeKind::Optional:
       assert(DWARFMangling && "sugared types are only legal for the debugger");
       appendType(cast<OptionalType>(tybase)->getBaseType());
@@ -1498,7 +1510,7 @@ unsigned ASTMangler::appendBoundGenericArgs(DeclContext *dc,
     // If we are generic at this level, emit all of the replacements at
     // this level.
     if (genericContext->isGeneric()) {
-      auto genericParams = subs.getGenericSignature()->getGenericParams();
+      auto genericParams = subs.getGenericSignature().getGenericParams();
       unsigned depth = genericParams[currentGenericParamIdx]->getDepth();
       auto replacements = subs.getReplacementTypes();
       for (unsigned lastGenericParamIdx = genericParams.size();
@@ -1556,7 +1568,8 @@ void ASTMangler::appendBoundGenericArgs(Type type, bool &isFirstArgList) {
 static bool conformanceHasIdentity(const RootProtocolConformance *root) {
   auto conformance = dyn_cast<NormalProtocolConformance>(root);
   if (!conformance) {
-    assert(isa<SelfProtocolConformance>(root));
+    assert(isa<SelfProtocolConformance>(root) ||
+           isa<BuiltinProtocolConformance>(root));
     return true;
   }
 
@@ -1577,8 +1590,9 @@ static bool conformanceHasIdentity(const RootProtocolConformance *root) {
 static bool isRetroactiveConformance(const RootProtocolConformance *root) {
   auto conformance = dyn_cast<NormalProtocolConformance>(root);
   if (!conformance) {
-    assert(isa<SelfProtocolConformance>(root));
-    return false; // self-conformances are never retroactive.
+    assert(isa<SelfProtocolConformance>(root) ||
+           isa<BuiltinProtocolConformance>(root));
+    return false; // self-conformances are never retroactive. nor are builtin.
   }
 
   return conformance->isRetroactive();
@@ -2130,10 +2144,10 @@ void ASTMangler::appendContext(const DeclContext *ctx, StringRef useModuleName) 
       auto wrapperInit = cast<PropertyWrapperInitializer>(ctx);
       switch (wrapperInit->getKind()) {
       case PropertyWrapperInitializer::Kind::WrappedValue:
-        appendBackingInitializerEntity(wrapperInit->getParam());
+        appendBackingInitializerEntity(wrapperInit->getWrappedVar());
         break;
       case PropertyWrapperInitializer::Kind::ProjectedValue:
-        appendInitFromProjectedValueEntity(wrapperInit->getParam());
+        appendInitFromProjectedValueEntity(wrapperInit->getWrappedVar());
         break;
       }
       return;
@@ -2586,7 +2600,7 @@ bool ASTMangler::appendGenericSignature(GenericSignature sig,
   CurGenericSignature = canSig;
 
   unsigned initialParamDepth;
-  TypeArrayView<GenericTypeParamType> genericParams;
+  ArrayRef<CanTypeWrapper<GenericTypeParamType>> genericParams;
   ArrayRef<Requirement> requirements;
   SmallVector<Requirement, 4> requirementsBuffer;
   if (contextSig) {
@@ -2597,12 +2611,12 @@ bool ASTMangler::appendGenericSignature(GenericSignature sig,
     }
 
     // The signature depth starts above the depth of the context signature.
-    if (!contextSig->getGenericParams().empty()) {
-      initialParamDepth = contextSig->getGenericParams().back()->getDepth() + 1;
+    if (!contextSig.getGenericParams().empty()) {
+      initialParamDepth = contextSig.getGenericParams().back()->getDepth() + 1;
     }
 
     // Find the parameters at this depth (or greater).
-    genericParams = canSig->getGenericParams();
+    genericParams = canSig.getGenericParams();
     unsigned firstParam = genericParams.size();
     while (firstParam > 1 &&
            genericParams[firstParam-1]->getDepth() >= initialParamDepth)
@@ -2614,11 +2628,11 @@ bool ASTMangler::appendGenericSignature(GenericSignature sig,
     // it's better to mangle the complete canonical signature because we
     // have a special-case mangling for that.
     if (genericParams.empty() &&
-        contextSig->getGenericParams().size() == 1 &&
-        contextSig->getRequirements().empty()) {
+        contextSig.getGenericParams().size() == 1 &&
+        contextSig.getRequirements().empty()) {
       initialParamDepth = 0;
-      genericParams = canSig->getGenericParams();
-      requirements = canSig->getRequirements();
+      genericParams = canSig.getGenericParams();
+      requirements = canSig.getRequirements();
     } else {
       requirementsBuffer = canSig->requirementsNotSatisfiedBy(contextSig);
       requirements = requirementsBuffer;
@@ -2626,8 +2640,8 @@ bool ASTMangler::appendGenericSignature(GenericSignature sig,
   } else {
     // Use the complete canonical signature.
     initialParamDepth = 0;
-    genericParams = canSig->getGenericParams();
-    requirements = canSig->getRequirements();
+    genericParams = canSig.getGenericParams();
+    requirements = canSig.getRequirements();
   }
 
   if (genericParams.empty() && requirements.empty())
@@ -2708,7 +2722,7 @@ void ASTMangler::appendRequirement(const Requirement &reqt) {
 }
 
 void ASTMangler::appendGenericSignatureParts(
-                                     TypeArrayView<GenericTypeParamType> params,
+                                     ArrayRef<CanTypeWrapper<GenericTypeParamType>> params,
                                      unsigned initialParamDepth,
                                      ArrayRef<Requirement> requirements) {
   // Mangle the requirements.
@@ -3058,6 +3072,10 @@ ASTMangler::appendProtocolConformance(const ProtocolConformance *conformance) {
     appendModule(Mod, DC->getAsDecl()->getAlternateModuleName());
   }
 
+  // If this is a non-nominal type, we're done.
+  if (!conformingType->getAnyNominal())
+    return;
+
   contextSig =
     conformingType->getAnyNominal()->getGenericSignatureOfContext();
 
@@ -3082,6 +3100,9 @@ void ASTMangler::appendProtocolConformanceRef(
     assert(DC->getAsDecl());
     appendModule(conformance->getDeclContext()->getParentModule(),
                  DC->getAsDecl()->getAlternateModuleName());
+  // Builtin conformances are always from the Swift module.
+  } else if (isa<BuiltinProtocolConformance>(conformance)) {
+    appendOperator("HP");
   } else if (conformance->getDeclContext()->getParentModule() ==
                conformance->getType()->getAnyNominal()->getParentModule()) {
     appendOperator("HP");
@@ -3127,7 +3148,7 @@ void ASTMangler::appendDependentProtocolConformance(
       appendProtocolName(entry.second);
       auto index =
         conformanceRequirementIndex(entry,
-                                    CurGenericSignature->getRequirements());
+                                    CurGenericSignature.getRequirements());
       // This is never an unknown index and so must be adjusted by 2 per ABI.
       appendOperator("HD", Index(index + 2));
       continue;
@@ -3173,7 +3194,7 @@ void ASTMangler::appendAnyProtocolConformance(
     appendDependentProtocolConformance(path);
   } else if (auto opaqueType = conformingType->getAs<OpaqueTypeArchetypeType>()) {
     GenericSignature opaqueSignature = opaqueType->getBoundSignature();
-    GenericTypeParamType *opaqueTypeParam = opaqueSignature->getGenericParams().back();
+    GenericTypeParamType *opaqueTypeParam = opaqueSignature.getGenericParams().back();
     ConformanceAccessPath conformanceAccessPath =
         opaqueSignature->getConformanceAccessPath(opaqueTypeParam,
                                                   conformance.getAbstract());

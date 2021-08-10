@@ -233,6 +233,14 @@ PatternBindingEntryRequest::evaluate(Evaluator &eval,
     }
   }
 
+  // Reject "class" methods on actors.
+  if (StaticSpelling == StaticSpellingKind::KeywordClass &&
+      binding->getDeclContext()->getSelfClassDecl() &&
+      binding->getDeclContext()->getSelfClassDecl()->isActor()) {
+    binding->diagnose(diag::class_var_not_in_class, false)
+        .fixItReplace(binding->getStaticLoc(), "static");
+  }
+
   // Check the pattern.
   auto contextualPattern =
       ContextualPattern::forPatternBindingDecl(binding, entryNumber);
@@ -1068,7 +1076,7 @@ static Expr *synthesizeCopyWithZoneCall(Expr *Val, VarDecl *VD,
   // Drop the self type
   copyMethodType = copyMethodType->getResult()->castTo<FunctionType>();
 
-  auto DSCE = new (Ctx) DotSyntaxCallExpr(DRE, SourceLoc(), Val);
+  auto DSCE = DotSyntaxCallExpr::create(Ctx, DRE, SourceLoc(), Val);
   DSCE->setImplicit();
   DSCE->setType(copyMethodType);
   DSCE->setThrows(false);
@@ -1553,7 +1561,7 @@ synthesizeObservedSetterBody(AccessorDecl *Set, TargetImpl target,
       auto *SelfDRE =
           buildSelfReference(SelfDecl, SelfAccessorKind::Peer, IsSelfLValue);
       SelfDRE = maybeWrapInOutExpr(SelfDRE, Ctx);
-      auto *DSCE = new (Ctx) DotSyntaxCallExpr(Callee, SourceLoc(), SelfDRE);
+      auto *DSCE = DotSyntaxCallExpr::create(Ctx, Callee, SourceLoc(), SelfDRE);
 
       if (auto funcType = type->getAs<FunctionType>())
         type = funcType->getResult();
@@ -1566,7 +1574,7 @@ synthesizeObservedSetterBody(AccessorDecl *Set, TargetImpl target,
     if (arg) {
       Call = CallExpr::createImplicit(Ctx, Callee, {ValueDRE}, {Identifier()});
     } else {
-      Call = CallExpr::createImplicit(Ctx, Callee, {}, {});
+      Call = CallExpr::createImplicitEmpty(Ctx, Callee);
     }
 
     if (auto funcType = type->getAs<FunctionType>())
@@ -1734,7 +1742,7 @@ synthesizeModifyCoroutineBodyWithSimpleDidSet(AccessorDecl *accessor,
       auto *SelfDRE = buildSelfReference(SelfDecl, SelfAccessorKind::Peer,
                                          storage->isSetterMutating());
       SelfDRE = maybeWrapInOutExpr(SelfDRE, ctx);
-      auto *DSCE = new (ctx) DotSyntaxCallExpr(Callee, SourceLoc(), SelfDRE);
+      auto *DSCE = DotSyntaxCallExpr::create(ctx, Callee, SourceLoc(), SelfDRE);
 
       if (auto funcType = type->getAs<FunctionType>())
         type = funcType->getResult();
@@ -1743,7 +1751,7 @@ synthesizeModifyCoroutineBodyWithSimpleDidSet(AccessorDecl *accessor,
       Callee = DSCE;
     }
 
-    auto *Call = CallExpr::createImplicit(ctx, Callee, {}, {});
+    auto *Call = CallExpr::createImplicitEmpty(ctx, Callee);
     if (auto funcType = type->getAs<FunctionType>())
       type = funcType->getResult();
     Call->setType(type);
@@ -2578,31 +2586,24 @@ static VarDecl *synthesizePropertyWrapperProjectionVar(
 
 static void typeCheckSynthesizedWrapperInitializer(VarDecl *wrappedVar,
                                                    Expr *&initializer) {
-  // Figure out the context in which the initializer was written.
-  auto *parentPBD = wrappedVar->getParentPatternBinding();
-  auto i = parentPBD->getPatternEntryIndexForVarDecl(wrappedVar);
-  DeclContext *originalDC = parentPBD->getDeclContext();
-  if (!originalDC->isLocalContext()) {
-    auto initContext =
-        cast_or_null<PatternBindingInitializer>(parentPBD->getInitContext(i));
-    if (initContext)
-      originalDC = initContext;
-  }
+  auto *dc = wrappedVar->getInnermostDeclContext();
+  auto &ctx = wrappedVar->getASTContext();
+  auto *initContext = new (ctx) PropertyWrapperInitializer(
+      dc, wrappedVar, PropertyWrapperInitializer::Kind::WrappedValue);
 
   // Type-check the initialization.
-  auto *pattern = parentPBD->getPattern(i);
-  TypeChecker::typeCheckBinding(pattern, initializer, originalDC,
-                                wrappedVar->getType(), parentPBD, i);
+  using namespace constraints;
+  auto target = SolutionApplicationTarget::forPropertyWrapperInitializer(
+      wrappedVar, initContext, initializer);
+  auto result = TypeChecker::typeCheckExpression(target);
+  if (!result)
+    return;
 
-  if (auto initializerContext =
-          dyn_cast_or_null<Initializer>(parentPBD->getInitContext(i))) {
-    TypeChecker::contextualizeInitializer(initializerContext, initializer);
-  }
+  initializer = result->getAsExpr();
 
-  auto *backingVar = wrappedVar->getPropertyWrapperBackingProperty();
-  auto *backingPBD = backingVar->getParentPatternBinding();
-  checkPropertyWrapperActorIsolation(backingPBD, initializer);
-  TypeChecker::checkPropertyWrapperEffects(backingPBD, initializer);
+  TypeChecker::contextualizeInitializer(initContext, initializer);
+  checkPropertyWrapperActorIsolation(wrappedVar, initializer);
+  TypeChecker::checkInitializerEffects(initContext, initializer);
 }
 
 static PropertyWrapperMutability::Value
@@ -2961,21 +2962,7 @@ PropertyWrapperInitializerInfoRequest::evaluate(Evaluator &evaluator,
              !var->getName().hasDollarPrefix()) {
     wrappedValueInit = PropertyWrapperValuePlaceholderExpr::create(
         ctx, var->getSourceRange(), var->getType(), /*wrappedValue=*/nullptr);
-
-    if (auto *param = dyn_cast<ParamDecl>(var)) {
-      wrappedValueInit = buildPropertyWrapperInitCall(
-          var, storageType, wrappedValueInit, PropertyWrapperInitKind::WrappedValue);
-      TypeChecker::typeCheckExpression(wrappedValueInit, dc);
-
-      // Check initializer effects.
-      auto *initContext = new (ctx) PropertyWrapperInitializer(
-          dc, param, PropertyWrapperInitializer::Kind::WrappedValue);
-      TypeChecker::contextualizeInitializer(initContext, wrappedValueInit);
-      checkInitializerActorIsolation(initContext, wrappedValueInit);
-      TypeChecker::checkInitializerEffects(initContext, wrappedValueInit);
-    } else {
-      typeCheckSynthesizedWrapperInitializer(var, wrappedValueInit);
-    }
+    typeCheckSynthesizedWrapperInitializer(var, wrappedValueInit);
   }
 
   return PropertyWrapperInitializerInfo(wrappedValueInit, projectedValueInit);

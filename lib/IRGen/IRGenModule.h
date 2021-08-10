@@ -735,6 +735,8 @@ public:
   llvm::PointerType *SwiftAsyncLetPtrTy;
   llvm::IntegerType *SwiftTaskOptionRecordPtrTy;
   llvm::PointerType *SwiftTaskGroupPtrTy;
+  llvm::StructType  *SwiftTaskOptionRecordTy;
+  llvm::StructType  *SwiftTaskGroupTaskOptionRecordTy;
   llvm::PointerType *SwiftJobPtrTy;
   llvm::IntegerType *ExecutorFirstTy;
   llvm::IntegerType *ExecutorSecondTy;
@@ -850,7 +852,7 @@ public:
   llvm::PointerType *getEnumValueWitnessTablePtrTy();
 
   void unimplemented(SourceLoc, StringRef Message);
-  LLVM_ATTRIBUTE_NORETURN
+  [[noreturn]]
   void fatal_unimplemented(SourceLoc, StringRef Message);
   void error(SourceLoc loc, const Twine &message);
 
@@ -1153,9 +1155,6 @@ private:
   /// categories.
   SmallVector<ExtensionDecl*, 4> ObjCCategoryDecls;
 
-  /// List of fields descriptors to register in runtime.
-  SmallVector<llvm::GlobalVariable *, 4> FieldDescriptors;
-
   /// Map of Objective-C protocols and protocol references, bitcast to i8*.
   /// The interesting global variables relating to an ObjC protocol.
   struct ObjCProtocolPair {
@@ -1331,6 +1330,7 @@ public:
   llvm::Constant *getFixLifetimeFn();
   
   llvm::Constant *getFixedClassInitializationFn();
+  llvm::Function *getAwaitAsyncContinuationFn();
 
   /// The constructor used when generating code.
   ///

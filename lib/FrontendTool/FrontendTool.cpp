@@ -174,14 +174,12 @@ static bool writeSIL(SILModule &SM, const PrimarySpecificPaths &PSPs,
 ///
 /// \see swift::printAsObjC
 static bool printAsObjCIfNeeded(StringRef outputPath, ModuleDecl *M,
-                                StringRef bridgingHeader, bool moduleIsPublic) {
+                                StringRef bridgingHeader) {
   if (outputPath.empty())
     return false;
   return withOutputFile(M->getDiags(), outputPath,
                         [&](raw_ostream &out) -> bool {
-    auto requiredAccess = moduleIsPublic ? AccessLevel::Public
-                                         : AccessLevel::Internal;
-    return printAsObjC(out, M, bridgingHeader, requiredAccess);
+    return printAsObjC(out, M, bridgingHeader);
   });
 }
 
@@ -684,63 +682,6 @@ static bool writeTBDIfNeeded(CompilerInstance &Instance) {
   return writeTBD(Instance.getMainModule(), TBDPath, tbdOpts);
 }
 
-static std::string changeToLdAdd(StringRef ldHide) {
-  SmallString<64> SymbolBuffer;
-  llvm::raw_svector_ostream OS(SymbolBuffer);
-  auto Parts = ldHide.split("$hide$");
-  assert(!Parts.first.empty());
-  assert(!Parts.second.empty());
-  OS << Parts.first << "$add$" << Parts.second;
-  return OS.str().str();
-}
-
-static bool writeLdAddCFileIfNeeded(CompilerInstance &Instance) {
-  const auto &Invocation = Instance.getInvocation();
-  const auto &frontendOpts = Invocation.getFrontendOptions();
-  if (!frontendOpts.InputsAndOutputs.isWholeModule())
-    return false;
-  auto Path = Invocation.getLdAddCFileOutputPathForWholeModule();
-  if (Path.empty())
-    return false;
-  if (!frontendOpts.InputsAndOutputs.isWholeModule()) {
-    Instance.getDiags().diagnose(SourceLoc(),
-                                 diag::tbd_only_supported_in_whole_module);
-    return true;
-  }
-  if (!Invocation.getTBDGenOptions().ModuleInstallNameMapPath.empty()) {
-    Instance.getDiags().diagnose(SourceLoc(),
-                                 diag::linker_directives_choice_confusion);
-    return true;
-  }
-  auto tbdOpts = Invocation.getTBDGenOptions();
-  tbdOpts.LinkerDirectivesOnly = true;
-  auto *module = Instance.getMainModule();
-  auto ldSymbols =
-      getPublicSymbols(TBDGenDescriptor::forModule(module, tbdOpts));
-  std::error_code EC;
-  llvm::raw_fd_ostream OS(Path, EC, llvm::sys::fs::F_None);
-  if (EC) {
-    Instance.getDiags().diagnose(SourceLoc(), diag::error_opening_output, Path,
-                                 EC.message());
-    return true;
-  }
-  OS << "// Automatically generated C source file from the Swift compiler \n"
-     << "// to add removed symbols back to the high-level framework for deployment\n"
-     << "// targets prior to the OS version when these symbols were moved to\n"
-     << "// a low-level framework " << module->getName().str() << ".\n\n";
-  unsigned Idx = 0;
-  for (auto &S: ldSymbols) {
-    SmallString<32> NameBuffer;
-    llvm::raw_svector_ostream NameOS(NameBuffer);
-    NameOS << "ldAdd_" << Idx;
-    OS << "extern const char " << NameOS.str() << " __asm(\"" <<
-      changeToLdAdd(S) << "\");\n";
-    OS << "const char " << NameOS.str() << " = 0;\n";
-    ++ Idx;
-  }
-  return false;
-}
-
 static bool performCompileStepsPostSILGen(CompilerInstance &Instance,
                                           std::unique_ptr<SILModule> SM,
                                           ModuleOrSourceFile MSF,
@@ -853,8 +794,7 @@ static bool emitAnyWholeModulePostTypeCheckSupplementaryOutputs(
     }
     hadAnyError |= printAsObjCIfNeeded(
         Invocation.getObjCHeaderOutputPathForAtMostOnePrimary(),
-        Instance.getMainModule(), BridgingHeaderPathForPrint,
-        Invocation.isModuleExternallyConsumed(Instance.getMainModule()));
+        Instance.getMainModule(), BridgingHeaderPathForPrint);
   }
 
   // Only want the header if there's been any errors, ie. there's not much
@@ -884,9 +824,6 @@ static bool emitAnyWholeModulePostTypeCheckSupplementaryOutputs(
 
   {
     hadAnyError |= writeTBDIfNeeded(Instance);
-  }
-  {
-    hadAnyError |= writeLdAddCFileIfNeeded(Instance);
   }
 
   return hadAnyError;
@@ -1048,7 +985,13 @@ static bool printSwiftVersion(const CompilerInvocation &Invocation) {
 
 static void printSingleFrontendOpt(llvm::opt::OptTable &table, options::ID id,
                                    llvm::raw_ostream &OS) {
-  if (table.getOption(id).hasFlag(options::FrontendOption)) {
+  if (table.getOption(id).hasFlag(options::FrontendOption) ||
+      table.getOption(id).hasFlag(options::AutolinkExtractOption) ||
+      table.getOption(id).hasFlag(options::ModuleWrapOption) ||
+      table.getOption(id).hasFlag(options::SwiftIndentOption) ||
+      table.getOption(id).hasFlag(options::SwiftAPIExtractOption) ||
+      table.getOption(id).hasFlag(options::SwiftSymbolGraphExtractOption) ||
+      table.getOption(id).hasFlag(options::SwiftAPIDigesterOption)) {
     auto name = StringRef(table.getOptionName(id));
     if (!name.empty()) {
       OS << "    \"" << name << "\",\n";
@@ -1126,7 +1069,6 @@ withSemanticAnalysis(CompilerInstance &Instance, FrontendObserver *observer,
 static bool performScanDependencies(CompilerInstance &Instance) {
   auto batchScanInput =
       Instance.getASTContext().SearchPathOpts.BatchScanInputFilePath;
-  ModuleDependenciesCache SingleUseCache;
   if (batchScanInput.empty()) {
     if (Instance.getInvocation().getFrontendOptions().ImportPrescan)
       return dependencies::prescanDependencies(Instance);
@@ -1966,6 +1908,8 @@ public:
     auto effective = LangOpts.EffectiveLanguageVersion;
     if (effective != version::Version::getCurrentLanguageVersion()) {
       os << "Compiling with effective version " << effective;
+    } else {
+      os << "Compiling with the current language version";
     }
     os << "\n";
   };

@@ -112,12 +112,10 @@ PolymorphicEffectKindRequest::evaluate(Evaluator &evaluator,
     return PolymorphicEffectKind::Always;
   }
 
-  if (auto genericSig = decl->getGenericSignature()) {
-    for (auto req : genericSig->getRequirements()) {
-      if (req.getKind() == RequirementKind::Conformance) {
-        if (req.getProtocolDecl()->hasPolymorphicEffect(kind)) {
-          return PolymorphicEffectKind::ByConformance;
-        }
+  for (auto req : decl->getGenericSignature().getRequirements()) {
+    if (req.getKind() == RequirementKind::Conformance) {
+      if (req.getProtocolDecl()->hasPolymorphicEffect(kind)) {
+        return PolymorphicEffectKind::ByConformance;
       }
     }
   }
@@ -758,7 +756,7 @@ public:
   /// Check to see if the given function application throws or is async.
   Classification classifyApply(ApplyExpr *E) {
     if (isa<SelfApplyExpr>(E)) {
-      assert(!E->implicitlyAsync());
+      assert(!E->isImplicitlyAsync());
       return Classification();
     }
 
@@ -776,7 +774,7 @@ public:
     if (!fnType->isThrowing() &&
         !E->implicitlyThrows() &&
         !fnType->isAsync() &&
-        !E->implicitlyAsync()) {
+        !E->isImplicitlyAsync()) {
       return Classification();
     }
 
@@ -794,7 +792,7 @@ public:
 
     auto classifyApplyEffect = [&](EffectKind kind) {
       if (!fnType->hasEffect(kind) &&
-          !(kind == EffectKind::Async && E->implicitlyAsync()) &&
+          !(kind == EffectKind::Async && E->isImplicitlyAsync()) &&
           !(kind == EffectKind::Throws && E->implicitlyThrows())) {
         return;
       }
@@ -2870,7 +2868,7 @@ private:
          }
 
          auto *call = dyn_cast<ApplyExpr>(&diag.expr);
-         if (call && call->implicitlyAsync()) {
+         if (call && call->isImplicitlyAsync()) {
            // Emit a tailored note if the call is implicitly async, meaning the
            // callee is isolated to an actor.
            auto callee = call->getCalledValue();

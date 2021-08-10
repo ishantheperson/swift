@@ -23,6 +23,7 @@
 #include "swift/AST/Availability.h"
 #include "swift/AST/DiagnosticsSema.h"
 #include "swift/AST/GenericParamList.h"
+#include "swift/AST/GenericSignature.h"
 #include "swift/AST/KnownProtocols.h"
 #include "swift/AST/LazyResolver.h"
 #include "swift/AST/NameLookup.h"
@@ -42,7 +43,6 @@ class Decl;
 class DeclAttribute;
 class DiagnosticEngine;
 class ExportContext;
-class GenericSignatureBuilder;
 class NominalTypeDecl;
 class NormalProtocolConformance;
 class RootProtocolConformance;
@@ -231,7 +231,6 @@ enum class CheckedCastContextKind {
 };
 
 namespace TypeChecker {
-Type getArraySliceType(SourceLoc loc, Type elementType);
 Type getOptionalType(SourceLoc loc, Type elementType);
 
 /// Bind an UnresolvedDeclRefExpr by performing name lookup and
@@ -1021,6 +1020,9 @@ diagnosePotentialOpaqueTypeUnavailability(SourceRange ReferenceRange,
                                           const DeclContext *ReferenceDC,
                                           const UnavailabilityReason &Reason);
 
+void checkConcurrencyAvailability(SourceRange ReferenceRange,
+                                  const DeclContext *ReferenceDC);
+
 /// Emits a diagnostic for a reference to a storage accessor that is
 /// potentially unavailable.
 void diagnosePotentialAccessorUnavailability(
@@ -1109,7 +1111,7 @@ void performTypoCorrection(DeclContext *DC, DeclRefKind refKind,
                            Type baseTypeOrNull,
                            NameLookupOptions lookupOptions,
                            TypoCorrectionResults &corrections,
-                           GenericSignatureBuilder *gsb = nullptr,
+                           GenericSignature genericSig = GenericSignature(),
                            unsigned maxResults = 4);
 
 /// Check if the given decl has a @_semantics attribute that gives it

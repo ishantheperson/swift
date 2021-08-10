@@ -492,13 +492,7 @@ public:
   TypeBase *getWithoutSyntaxSugar();
 
   /// getASTContext - Return the ASTContext that this type belongs to.
-  ASTContext &getASTContext() {
-    // If this type is canonical, it has the ASTContext in it.
-    if (isCanonical())
-      return *const_cast<ASTContext*>(Context);
-    // If not, canonicalize it to get the Context.
-    return *const_cast<ASTContext*>(getCanonicalType()->Context);
-  }
+  ASTContext &getASTContext();
   
   /// isEqual - Return true if these two types are equal, ignoring sugar.
   ///
@@ -1122,10 +1116,22 @@ public:
   TypeSubstitutionMap getMemberSubstitutions(const ValueDecl *member,
                                              GenericEnvironment *genericEnv=nullptr);
 
+  /// Retrieve the type of the given property as seen through the given base
+  /// type, substituting generic arguments where necessary. This is the same as
+  /// the more general overload of \c TypeBase::getTypeOfMember, but defaults to
+  /// the property's interface type for the \c memberType.
+  ///
+  /// \param module The module in which the substitution occurs.
+  ///
+  /// \param member The property whose type we are substituting.
+  ///
+  /// \returns The resulting property type.
+  Type getTypeOfMember(ModuleDecl *module, const VarDecl *member);
+
   /// Retrieve the type of the given member as seen through the given base
   /// type, substituting generic arguments where necessary.
   ///
-  /// This routine allows one to take a concrete type (the "this" type) and
+  /// This routine allows one to take a concrete type (the "self" type) and
   /// and a member of that type (or one of its superclasses), then determine
   /// what type an access to that member through the base type will have.
   /// For example, given:
@@ -1136,20 +1142,23 @@ public:
   /// }
   /// \endcode
   ///
-  /// Given the type \c Vector<Int> and the member \c add, the resulting type
-  /// of the member will be \c (self : Vector<Int>) -> (value : Int) -> ().
+  /// Given the type \c Vector<Int>, the member \c add, and its method interface
+  /// type (value: T) -> Void the resulting type will be (value: Int) -> Void.
   ///
   /// \param module The module in which the substitution occurs.
   ///
   /// \param member The member whose type we are substituting.
   ///
-  /// \param memberType The type of the member, in which archetypes will be
-  /// replaced by the generic arguments provided by the base type. If null,
-  /// the member's type will be used.
+  /// \param memberType The type of the member in which generic parameters will
+  /// be replaced by the generic arguments provided by the base type. Note this
+  /// must not be a GenericFunctionType. For a method, either strip the self
+  /// parameter and generic signature using e.g \c getMethodInterfaceType, or
+  /// use \c substGenericArgs if you want to substitute types for any of the
+  /// method's generic parameters.
   ///
-  /// \returns the resulting member type.
+  /// \returns The resulting member type.
   Type getTypeOfMember(ModuleDecl *module, const ValueDecl *member,
-                       Type memberType = Type());
+                       Type memberType);
 
   /// Get the type of a superclass member as seen from the subclass,
   /// substituting generic parameters, dynamic Self return, and the
@@ -3009,19 +3018,16 @@ protected:
   }
 
 public:
-  /// Break an input type into an array of \c AnyFunctionType::Params.
-  static void decomposeInput(Type type,
+  /// Break a tuple or paren type into an array of \c AnyFunctionType::Params.
+  static void decomposeTuple(Type type,
                              SmallVectorImpl<Param> &result);
 
-  /// Take an array of parameters and turn it into an input type.
-  ///
-  /// The result type is only there as a way to extract the ASTContext when
-  /// needed.
-  static Type composeInput(ASTContext &ctx, ArrayRef<Param> params,
+  /// Take an array of parameters and turn it into a tuple or paren type.
+  static Type composeTuple(ASTContext &ctx, ArrayRef<Param> params,
                            bool canonicalVararg);
-  static Type composeInput(ASTContext &ctx, CanParamArrayRef params,
+  static Type composeTuple(ASTContext &ctx, CanParamArrayRef params,
                            bool canonicalVararg) {
-    return composeInput(ctx, params.getOriginalArray(), canonicalVararg);
+    return composeTuple(ctx, params.getOriginalArray(), canonicalVararg);
   }
 
   /// Given two arrays of parameters determine if they are equal in their
@@ -3509,7 +3515,8 @@ public:
                               
   /// Substitute the given generic arguments into this generic
   /// function type and return the resulting non-generic type.
-  FunctionType *substGenericArgs(SubstitutionMap subs);
+  FunctionType *substGenericArgs(SubstitutionMap subs,
+                                 SubstOptions options = None);
   FunctionType *substGenericArgs(llvm::function_ref<Type(Type)> substFn) const;
 
   void Profile(llvm::FoldingSetNodeID &ID) {
@@ -5038,6 +5045,21 @@ public:
   }
 };
 
+/// The type T..., which is sugar for a sequence of argument values.
+class VariadicSequenceType : public UnarySyntaxSugarType {
+  VariadicSequenceType(const ASTContext &ctx, Type base,
+                       RecursiveTypeProperties properties)
+    : UnarySyntaxSugarType(TypeKind::VariadicSequence, ctx, base, properties) {}
+
+public:
+  /// Return a uniqued variadic sequence type with the specified base type.
+  static VariadicSequenceType *get(Type baseTy);
+
+  static bool classof(const TypeBase *T) {
+    return T->getKind() == TypeKind::VariadicSequence;
+  }
+};
+
 /// ProtocolType - A protocol type describes an abstract interface implemented
 /// by another type.
 class ProtocolType : public NominalType {
@@ -5465,13 +5487,13 @@ class OpaqueTypeArchetypeType final : public ArchetypeType,
   GenericEnvironment *Environment;
   
 public:
-  /// Get 
-  
   /// Get an opaque archetype representing the underlying type of the given
-  /// opaque type decl.
-  static OpaqueTypeArchetypeType *get(OpaqueTypeDecl *Decl,
+  /// opaque type decl's opaque param with ordinal `ordinal`. For example, in
+  /// `(some P, some Q)`, `some P`'s type param would have ordinal 0 and `some
+  /// Q`'s type param would have ordinal 1.
+  static OpaqueTypeArchetypeType *get(OpaqueTypeDecl *Decl, unsigned ordinal,
                                       SubstitutionMap Substitutions);
-  
+
   OpaqueTypeDecl *getDecl() const {
     return OpaqueDecl;
   }
@@ -5502,7 +5524,7 @@ public:
   ///
   /// then the underlying type of `some P` would be ordinal 0, and `some Q` would be ordinal 1.
   unsigned getOrdinal() const {
-    // TODO: multiple opaque types
+    // TODO [OPAQUE SUPPORT]: multiple opaque types
     return 0;
   }
   
@@ -5994,6 +6016,22 @@ public:
 };
 DEFINE_EMPTY_CAN_TYPE_WRAPPER(PlaceholderType, Type)
 
+/// getASTContext - Return the ASTContext that this type belongs to.
+inline ASTContext &TypeBase::getASTContext() {
+  // If this type is canonical, it has the ASTContext in it.
+  if (isCanonical())
+    return *const_cast<ASTContext*>(Context);
+
+  // getCanonicalType() on GenericFunctionType is very expensive;
+  // instead we can more easily fish the ASTContext out of any
+  // structural sub-component.
+  if (auto *genericFnType = dyn_cast<GenericFunctionType>(this))
+    return genericFnType->getGenericParams()[0]->getASTContext();
+
+  // If not, canonicalize it to get the Context.
+  return *const_cast<ASTContext*>(getCanonicalType()->Context);
+}
+
 inline bool TypeBase::isTypeVariableOrMember() {
   if (is<TypeVariableType>())
     return true;
@@ -6216,7 +6254,7 @@ inline bool CanType::isActuallyCanonicalOrNull() const {
 
 inline Type TupleTypeElt::getVarargBaseTy() const {
   TypeBase *T = getType().getPointer();
-  if (auto *AT = dyn_cast<ArraySliceType>(T))
+  if (auto *AT = dyn_cast<VariadicSequenceType>(T))
     return AT->getBaseType();
   if (auto *BGT = dyn_cast<BoundGenericType>(T)) {
     // It's the stdlib Array<T>.

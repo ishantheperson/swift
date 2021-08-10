@@ -581,6 +581,20 @@ public:
   }
 };
 
+class LocatorPathElt::TupleType : public StoredPointerElement<TypeBase> {
+public:
+  TupleType(Type type)
+      : StoredPointerElement(PathElementKind::TupleType, type.getPointer()) {
+    assert(type->getDesugaredType()->is<swift::TupleType>());
+  }
+
+  Type getType() const { return getStoredPointer(); }
+
+  static bool classof(const LocatorPathElt *elt) {
+    return elt->getKind() == PathElementKind::TupleType;
+  }
+};
+
 /// Abstract superclass for any kind of tuple element.
 class LocatorPathElt::AnyTupleElement : public StoredIntegerElement<1> {
 protected:
@@ -768,6 +782,19 @@ public:
 
   static bool classof(const LocatorPathElt *elt) {
     return elt->getKind() == ConstraintLocator::OpenedGeneric;
+  }
+};
+
+class LocatorPathElt::OpenedOpaqueArchetype final
+    : public StoredPointerElement<OpaqueTypeDecl> {
+public:
+  OpenedOpaqueArchetype(OpaqueTypeDecl *decl)
+      : StoredPointerElement(PathElementKind::OpenedOpaqueArchetype, decl) {}
+
+  OpaqueTypeDecl *getDecl() const { return getStoredPointer(); }
+
+  static bool classof(const LocatorPathElt *elt) {
+    return elt->getKind() == ConstraintLocator::OpenedOpaqueArchetype;
   }
 };
 

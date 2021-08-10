@@ -174,7 +174,12 @@ Alignment IRGenModule::getAsyncContextAlignment() const {
 void IRGenFunction::setupAsync(unsigned asyncContextIndex) {
   llvm::Value *c = CurFn->getArg(asyncContextIndex);
   asyncContextLocation = createAlloca(c->getType(), IGM.getPointerAlignment());
-  Builder.CreateStore(c, asyncContextLocation);
+
+  IRBuilder builder(IGM.getLLVMContext(), IGM.DebugInfo != nullptr);
+  // Insert the stores after the coro.begin.
+  builder.SetInsertPoint(getEarliestInsertionPoint()->getParent(),
+                         getEarliestInsertionPoint()->getIterator());
+  builder.CreateStore(c, asyncContextLocation);
 }
 
 llvm::Value *IRGenFunction::getAsyncTask() {
@@ -3771,6 +3776,11 @@ emitRetconCoroutineEntry(IRGenFunction &IGF, CanSILFunctionType fnType,
   // Set the coroutine handle; this also flags that is a coroutine so that
   // e.g. dynamic allocas use the right code generation.
   IGF.setCoroutineHandle(hdl);
+
+  auto *pt = IGF.Builder.IRBuilderBase::CreateAlloca(IGF.IGM.Int1Ty,
+                                                     /*array size*/ nullptr,
+                                                     "earliest insert point");
+  IGF.setEarliestInsertionPoint(pt);
 }
 
 void irgen::emitAsyncFunctionEntry(IRGenFunction &IGF,
@@ -3796,6 +3806,11 @@ void irgen::emitAsyncFunctionEntry(IRGenFunction &IGF,
   // Set the coroutine handle; this also flags that is a coroutine so that
   // e.g. dynamic allocas use the right code generation.
   IGF.setCoroutineHandle(hdl);
+  auto *pt = IGF.Builder.IRBuilderBase::CreateAlloca(IGF.IGM.Int1Ty,
+                                                     /*array size*/ nullptr,
+                                                     "earliest insert point");
+  IGF.setEarliestInsertionPoint(pt);
+  IGF.setupAsync(asyncContextIndex);
 }
 
 void irgen::emitYieldOnceCoroutineEntry(
@@ -3861,34 +3876,43 @@ llvm::Value *irgen::emitTaskCreate(
     IRGenFunction &IGF,
     llvm::Value *flags,
     llvm::Value *taskGroup,
-    llvm::Value *taskOptions,
     llvm::Value *futureResultType,
     llvm::Value *taskFunction,
     llvm::Value *localContextInfo,
     SubstitutionMap subs) {
-  llvm::CallInst *result;
-  taskOptions = IGF.Builder.CreateBitOrPointerCast(
-      taskOptions, IGF.IGM.SwiftTaskOptionRecordPtrTy);
-  if (taskGroup && futureResultType) {
-    taskGroup = IGF.Builder.CreateBitOrPointerCast(
-        taskGroup, IGF.IGM.SwiftTaskGroupPtrTy);
-    result = IGF.Builder.CreateCall(
-        IGF.IGM.getTaskCreateGroupFutureFn(),
-        {flags,
-         taskGroup,
-         taskOptions,
-         futureResultType,
-         taskFunction, localContextInfo});
-  } else if (futureResultType) {
-    result = IGF.Builder.CreateCall(
-      IGF.IGM.getTaskCreateFutureFn(),
-      {flags,
-       taskOptions,
-       futureResultType,
-       taskFunction, localContextInfo});
-  } else {
-    llvm_unreachable("no future?!");
+  // If there is a task group, emit a task group option structure to contain
+  // it.
+  llvm::Value *taskOptions = llvm::ConstantInt::get(
+      IGF.IGM.SwiftTaskOptionRecordPtrTy, 0);
+  if (taskGroup) {
+    TaskOptionRecordFlags optionsFlags(TaskOptionRecordKind::TaskGroup);
+    llvm::Value *optionsFlagsVal = llvm::ConstantInt::get(
+        IGF.IGM.SizeTy, optionsFlags.getOpaqueValue());
+
+    auto optionsRecord = IGF.createAlloca(
+        IGF.IGM.SwiftTaskGroupTaskOptionRecordTy, Alignment(),
+        "task_group_options");
+    auto optionsBaseRecord = IGF.Builder.CreateStructGEP(
+        optionsRecord, 0, Size());
+    IGF.Builder.CreateStore(
+        optionsFlagsVal,
+        IGF.Builder.CreateStructGEP(optionsBaseRecord, 0, Size()));
+    IGF.Builder.CreateStore(
+        taskOptions, IGF.Builder.CreateStructGEP(optionsBaseRecord, 1, Size()));
+
+    IGF.Builder.CreateStore(
+        taskGroup, IGF.Builder.CreateStructGEP(optionsRecord, 1, Size()));
+    taskOptions = IGF.Builder.CreateBitOrPointerCast(
+        optionsRecord.getAddress(), IGF.IGM.SwiftTaskOptionRecordPtrTy);
   }
+
+  assert(futureResultType && "no future?!");
+  llvm::CallInst *result = IGF.Builder.CreateCall(
+    IGF.IGM.getTaskCreateFn(),
+    {flags,
+     taskOptions,
+     futureResultType,
+     taskFunction, localContextInfo});
   result->setDoesNotThrow();
   result->setCallingConv(IGF.IGM.SwiftCC);
 
@@ -4045,6 +4069,11 @@ Address IRGenFunction::createErrorResultSlot(SILType errorType, bool isAsync) {
   auto addr = createAlloca(errorTI.getStorageType(),
                            errorTI.getFixedAlignment(), "swifterror");
 
+  if (!isAsync) {
+    builder.SetInsertPoint(getEarliestInsertionPoint()->getParent(),
+                           getEarliestInsertionPoint()->getIterator());
+  }
+
   // Only add the swifterror attribute on ABIs that pass it in a register.
   // We create a shadow stack location of the swifterror parameter for the
   // debugger on platforms that pass swifterror by reference and so we can't
@@ -4122,6 +4151,7 @@ void IRGenFunction::emitPrologue() {
   AllocaIP = Builder.IRBuilderBase::CreateAlloca(IGM.Int1Ty,
                                                  /*array size*/ nullptr,
                                                  "alloca point");
+  EarliestIP = AllocaIP;
 }
 
 /// Emit a branch to the return block and set the insert point there.
@@ -4161,6 +4191,8 @@ bool IRGenFunction::emitBranchToReturnBB() {
 
 /// Emit the epilogue for the function.
 void IRGenFunction::emitEpilogue() {
+  if (EarliestIP != AllocaIP)
+    EarliestIP->eraseFromParent();
   // Destroy the alloca insertion point.
   AllocaIP->eraseFromParent();
 }

@@ -548,6 +548,27 @@ ParserResult<TypeRepr> Parser::parseType(
       applyAttributeToType(tyR, attrs, specifier, specifierLoc, isolatedLoc));
 }
 
+ParserResult<TypeRepr> Parser::parseTypeWithOpaqueParams(Diag<> MessageID) {
+  GenericParamList *genericParams = nullptr;
+  if (Context.LangOpts.EnableExperimentalNamedOpaqueTypes) {
+    auto result = maybeParseGenericParams();
+    genericParams = result.getPtrOrNull();
+    if (result.hasCodeCompletion())
+      return makeParserCodeCompletionStatus();
+  }
+
+  auto typeResult = parseType(MessageID);
+  if (auto type = typeResult.getPtrOrNull()) {
+    return makeParserResult(
+        ParserStatus(typeResult),
+        genericParams ? new (Context)
+                            NamedOpaqueReturnTypeRepr(type, genericParams)
+                      : type);
+  } else {
+    return typeResult;
+  }
+}
+
 ParserResult<TypeRepr> Parser::parseDeclResultType(Diag<> MessageID) {
   if (Tok.is(tok::code_complete)) {
     if (CodeCompletion)
@@ -556,7 +577,7 @@ ParserResult<TypeRepr> Parser::parseDeclResultType(Diag<> MessageID) {
     return makeParserCodeCompletionStatus();
   }
 
-  auto result = parseType(MessageID);
+  auto result = parseTypeWithOpaqueParams(MessageID);
 
   if (!result.isParseErrorOrHasCompletion()) {
     if (Tok.is(tok::r_square)) {
@@ -1016,13 +1037,6 @@ ParserResult<TypeRepr> Parser::parseTypeTupleBody() {
     if (Tok.is(tok::kw_inout)) {
       Backtracking.emplace(*this);
       ObsoletedInOutLoc = consumeToken(tok::kw_inout);
-    }
-                                    
-    // If the label is "some", this could end up being an opaque type
-    // description if there's `some <identifier>` without a following colon,
-    // so we may need to backtrack as well.
-    if (Tok.isContextualKeyword("some")) {
-      Backtracking.emplace(*this);
     }
 
     // If the tuple element starts with a potential argument label followed by a
